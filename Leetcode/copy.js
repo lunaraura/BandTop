@@ -8,9 +8,9 @@ function checkRange(x, y, radius, entityList, flag){
   let inRange = [];
   for (let i = 0; i < entityList.length; i++){
     let entity = entityList[i];
-    let dx = entity.x - x;
-    let dy = entity.y - y;
-    let dist = Math.sqrt(dx*dx + dy*dy) 
+    let dx = entity.pos.x - x;
+    let dy = entity.pos.y - y;
+    let dist = Math.sqrt(dx*dx + dy*dy)
     if (flag == 1){
       dist = dist - entity.radius;
     }
@@ -84,8 +84,8 @@ const base = {
     runSpd: 3,
     size: 5,
     meleeRange: 10,
-    primary: {dmg: 2, spread: 0.1, mag: 30, rof: 10, falloffStart: 50, diminish: 0.1, wpnType: "hitscan"}, //diminish dmg by x per 1 unit
-    secondary: {dmg: 10, spread: 0.1, mag: 8, rof: 40, falloffStart: 50, diminish: 0.1, wpnType: "hitscan"}, //rof or tick cooldown
+    primary: {dmg: 2, spread: 0.1, mag: 30, rof: 60, falloffStart: 50, diminish: 0.1, wpnType: "projectile"}, //diminish dmg by x per 1 unit
+    secondary: {dmg: 10, spread: 0.1, mag: 8, rof: 40, falloffStart: 50, diminish: 0.1, wpnType: "projectile"}, //rof or tick cooldown
     melee: 10,
     ab1: 200,
     ab2: 400
@@ -122,18 +122,22 @@ class Avatar{
         this.spawn(this.team)
     }
     spawn(team){
-        this.x = team.x +(( Math.random()-0.5)*30);
-        this.y = team.y + ((Math.random()-0.5)*30);
+        this.pos.x = team.x +(( Math.random()-0.5)*30);
+        this.pos.y = team.y + ((Math.random()-0.5)*30);
         entitiesList.push(this)
         team.players.push(this)
     }
     moveCommand(){
-        this.pos.x += this.vel.x;
-        this.pos.y += this.vel.y;
+        this.pos.x += this.vel.x * this.walkSpd;
+        this.pos.y += this.vel.y * this.walkSpd;
+        this.pos.x = Math.min(CW, Math.max(0,this.pos.x))
+        this.pos.y = Math.min(CH, Math.max(0,this.pos.y))
+        this.vel = {x:0, y:0};
     }
     aimCommand(){
-        this.aim.x += this.aimvel.x
-        this.aim.x += this.aimvel.x
+        this.aim.x += this.aimvel.x;
+        this.aim.y += this.aimvel.y;
+        this.aimvel = {x:0, y:0};
     }
     fireReq(globalTime){
         //this.lastFiredAuto = 0
@@ -142,23 +146,25 @@ class Avatar{
         }
         if ((globalTime - this.lastFired.auto) >= 1/this.equipped.rof*10){
           this.fireCommand();
+          this.lastFired.auto = globalTime
         }
     }
     meleeReq(globalTime){
         if (this.reloading){
             return null;
         }
-        if((globalTime - this.lastFired.melee) >= 1/this.CD.melee*10){
+        if((globalTime - this.lastFired.melee) >= 1/this.CD.melee*100){
           this.meleeCommand();
         }
     }
     fireCommand(){
-      switch(this.equipped.type){
+      switch(this.equipped.wpnType){
         case "melee":
           break;
         case "hitscan":
           break;
         case "projectile":
+          createProjectile(this.pos, this.aim, this.team.id)
           break;   
       }
     }
@@ -179,13 +185,13 @@ class Bot {
     this.enemyData = [];
     this.autonomyRatio = 0.3;
     this.desirablePositions = []
-    this.pressurePositions = []
+    this.pressures = []
     botsList.push(this)
     this.initialize(x, y, team)
 
   }
   initialize(x, y, team){
-    let avatar = new Avatar(x,y,team)
+    let avatar = new Avatar(x, y, team)
     this.connected = avatar;
   }
   reviewInstance(){
@@ -202,6 +208,7 @@ class Bot {
       const aimVector = {x: dx/dist, y: dy/dist};
       let data = {
         entity: entity.id,
+        pos: entity.pos,
         hp: entity.hp,
         maxhp: entity.maxHealth,
         wpnType: entity.equipped.type,
@@ -224,84 +231,173 @@ class Bot {
       let desirablePositions = [];
       //sort by closest?
       for (let data of this.friendlyData){
-        let legroom = this.connected.size * 2;
+        let legroom = this.connected.size * 3;
         //find a spot at legroom distance at
         //somewhat perpendicular to
         //friendly's aim vector
         let angle = Math.atan2(data.aimDir.y, data.aimDir.x) + (Math.random() > 0.5 ? 1 : -1) * (Math.PI / 2);
         let pos = {
-          x: this.data.pos.x + Math.cos(angle) * legroom,
-          y: this.data.pos.y + Math.sin(angle) * legroom,
+          x: data.pos.x + Math.cos(angle) * legroom,
+          y: data.pos.y + Math.sin(angle) * legroom,
         };
         desirablePositions.push(pos)
       }
+
     }
     decideE(){
-      let pressureVectors = [];
       //all vectors might be same magnitude for movement
       //can end up strafing to fight or chasing low hp enemies
       //fight/flight actions depending on vector
       //aim down but lose running on fuller hp
       //strafe but lose accuracy
+      let pressureVectors = [];
       let safeDist = this.connected.equipped.falloffStart;
       for (let data of this.enemyData){
         let pressure = Math.min(safeDist / data.dist, 1); // Pressure decreases with distance
         let hpRatio = data.hp / data.maxhp;
-        pressure *= (1 - hpRatio/2); // More pressure on lower hp enemies
+        pressure *= (1 - hpRatio/2); 
         let selfHealthRatio = this.connected.hp / this.connected.maxHealth;
         if (selfHealthRatio < 0.3) {
-          pressure *= 0.5; // Reduce pressure if self hp is low
+          pressure *= 0.5; 
         }
         let magazineRatio = this.connected.magazineCurrent / this.connected.equipped.mag;
-        pressure *= magazineRatio; // More pressure with more ammo
-        //if looking at enemy right now, weigh closer to fight
-        //if not, aim weight towards enemy.
-        //if enemy is aiming at player (data.dir.x * -1. .y * -1), flight
+        pressure *= magazineRatio;
         let aimAngle = Math.atan2(this.connected.aim.y, this.connected.aim.x);
         let enemyAngle = Math.atan2(data.aimDir.y, data.aimDir.x);
         let angleDiff = Math.abs(aimAngle - enemyAngle);
         if (angleDiff < Math.PI / 4) {
-          pressure *= 1.2; // Increase pressure if directly aiming at enemy
+          pressure *= 1.1; // Increase pressure if directly aiming at enemy
         } else if (angleDiff > (3 * Math.PI) / 4) {
-          pressure *= 0.8; // Decrease pressure if enemy is behind
+          pressure *= 0.9; // Decrease pressure if enemy is behind
         }
-        let vector = {
+        let p = {
           x: data.dir.x * pressure,
           y: data.dir.y * pressure,
+          vel: data.velDir, 
+          healthPressure: hpRatio - selfHealthRatio
         };
-        console.log(vector)
-        pressureVectors.push(vector);
+        pressureVectors.push(p);
+        this.pressures = pressureVectors;
       }
     }
-    actionLoop(){
+    decideAction(tick){
+      let seed = Math.random(); //might be used later
+      if (this.pressures.length > 0 ){ //simple
+        let dist = this.enemyData[0].dist * 1
+        let aimAt = {x:this.pressures[0].x + this.pressures[0].vel.x * dist, y: this.pressures[0].y + this.pressures[0].vel.y * dist};
+        this.fireDecision = true;
+        this.connected.fireReq(tick)//or just this
+        //move aiming velocity to aimAt
+        this.connected.aimvel.x = (aimAt.x - this.connected.aim.x) * 0.9;
+        this.connected.aimvel.y = (aimAt.y - this.connected.aim.y) * 0.9;
+
+        let h = this.pressures[0].healthPressure
+        if (h < 0.3 && h > -0.3){
+          let perp = {
+          x: -this.pressures[0].y,
+          y: this.pressures[0].x
+          };
+          this.connected.vel.x += perp.x * 0.5;
+          this.connected.vel.y += perp.y * 0.5;
+        } else if (h < -0.3){
+          this.connected.vel.x -= this.pressures[0].x;
+          this.connected.vel.y -= this.pressures[0].y;
+        } else if (h > 0.3){
+          this.connected.vel.x += this.pressures[0].x;
+          this.connected.vel.y += this.pressures[0].y;
+        }
+      }
+      this.pressures = [];
+      this.friendlyData = []
+      this.enemyData = []
+    }
+    actionLoop(tick){
       this.reviewInstance();
       this.weighEntityPositions();
       this.decideF();
       this.decideE();
+      this.decideAction(tick);
     }
 }
 
 let tick = 0;
-let ms = 1000
-let rate = ms/100;
-let team1 = {x: 10, y: 10, id: 1, players: []}
-let team2 = {x: 30, y: 30, id: 1, players: []}
-let bot1 = new Bot(10, 10, team1)
-let bot2 = new Bot(30, 30, team2)
+let ms = 20;
+let rate = ms/1000;
+function teamCreate(teamnum, nop){
+  let centerX = CW / 2;
+  let centerY = CH / 2;
+  let radius = Math.min(CW, CH) / 10; // Distance from center
+  for (let i = 0; i < teamnum; i++) {
+    let angle = (2 * Math.PI / teamnum) * i;
+    let spawnX = centerX + Math.cos(angle) * radius;
+    let spawnY = centerY + Math.sin(angle) * radius;
+    let team = { players: [], x: spawnX, y: spawnY , id: i, casualties: 0};
+
+    for (let j = 0; j < nop; j++) {
+      spawnX += Math.random() * 10;
+      spawnY += Math.random() * 10;
+      let bot = new Bot(spawnX, spawnY, team)
+    }
+    teams.push(team);
+  }
+}
+teamCreate(2,2)
+
+function createProjectile(position, dir, teamID){
+  let projectile = {
+    pos: {x: position.x, y: position.y},
+    teamID: teamID,
+    vel: {x: dir.x, y: dir.y},
+    speed: 5,
+    range: 200,
+    traveled: 0,
+    dmg: 5,
+  }
+  let mag = Math.hypot(projectile.vel.x, projectile.vel.y);
+  projectile.vel.x = (projectile.vel.x / mag) * projectile.speed;
+  projectile.vel.y = (projectile.vel.y / mag) * projectile.speed;
+  projectileList.push(projectile);
+}
+function updateProjectiles(){
+  for (let i = projectileList.length - 1; i >= 0; i--){
+    let p = projectileList[i];
+    p.pos.x += p.vel.x;
+    p.pos.y += p.vel.y;
+    p.traveled += p.speed;
+    if (p.traveled >= p.range){
+      projectileList.splice(i, 1);
+      continue;
+    }
+    //check collision with entities
+    let hitEntities = checkRange(p.pos.x, p.pos.y, 3, entitiesList, 0);
+    for (let entity of hitEntities){
+      if (entity.team.id !== p.teamID){
+        entity.hp -= p.dmg;
+        console.log(entity.hp, entity.id)
+        projectileList.splice(i, 1);
+        break;
+      }
+    }
+  }
+}
 
 function animate(){
   ctx.clearRect(0, 0, CW, CH)
   for(let avatar of entitiesList){
     ctx.fillRect(avatar.pos.x, avatar.pos.y, 10, 10)
   }
+  for(let proj of projectileList){
+    ctx.fillRect(proj.pos.x, proj.pos.y, 2, 2)
+  }
 }
 function calculate(tick){
   for (let bot of botsList){
-    bot.actionLoop();
+    bot.actionLoop(tick);
   }
   for (let avatar of entitiesList){
     avatar.actionLoop();
   }
+  updateProjectiles();
 }
 function loop(rate){
   animate();
