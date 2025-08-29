@@ -1,0 +1,71 @@
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext("2d");
+
+//dictionary: composite, moveset
+//composite name: matter state, toughness, 
+const composites = { //maybe ranked 1 through 5
+    fire: {matter: plasma, tough: 5, elastic: 5, heatResist: 5, coldResist: -2, chemResist: 3},
+    water: {matter: liquid, tough: 5, elastic: 5, heatResist: -3, coldResist: -3, chemResist: 0},
+    lava: {matter: liquid, tough: 3, elastic: 2, heatResist: 5, coldRestist: -5, chemResist: 3},
+    stone: {matter: solid, tough: 2, elastic: 0, heatResist: 2, coldResist: 3, chemResist: 5},
+    crystalline: {matter: solid, tough: 0, elastic: 0, heatResist: 5, coldResist: 5, chemResist: 3},//can have very high variation except elastic & matter
+    organicAnimal: {matter: solid, tough: 3, elastic: 4, heatResist: -1, coldResist: -1, chemResist: -1},
+    organicPlant: {matter: solid, tough: 2, elastic: 4, heatResist: -3, coldResist: -3, chemResist: -2},
+}
+const species = {
+    canine: {}
+}
+//t: tolerance center, r:range. 0 +dir, 1 is -direction
+//calculate innate with (random - tolerance) * range.
+const speciesInnateVariation = {
+    canine: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 0.5, r: 10},
+        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    feline: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 0.5, r: 10},
+        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    reptile: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 0.5, r: 10},
+        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    bird: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 1, r: 10},
+        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    bug: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 1, r: 10},
+        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    spectre: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 1, r: 10},
+        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    elemental: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 1, r: 10},
+        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+}
+
+//species seperated from entitybuilding for cool variations
+function buildEntity(innerComposite, outerComposite, ){
+
+    return properties;
+}
+
+//base values from the species, allowed range for the certain species.
+//centerTolerance usually at 0.5 for -x to +x range.
+//can be 0 for (0 to x) range or 1 for (-x to 0) range
+function buildInnate(baseValues, allowedRange, centerTolerance){
+    Object.keys(baseValues).forEach((valueBase)=>{
+        valueBase += (Math.random() - centerTolerance) * allowedRange.valuesBase;
+    })
+}
+
+class Entity {
+    constructor (x, y){
+        this.x = x;
+        this.y = y;
+        this.speed = 1;
+        this.radius = 10;
+    }
+    moveTo(request) { //will be replaced by pathfinder in rblx
+        let dist = Math.hypot(request.x, request.y);
+        let vect = {x: request.x/dist, y: request.y/dist};
+        this.x += vect.x * this.speed;
+        this.y += vect.y * this.speed;
+    }
+    aimAt(position) { //probably just for the model
+        let dist = Math.hypot(position.x, position.y);
+        let vect = {x: position.x/dist, y: position.y/dist};
+
+    }
+}
+
