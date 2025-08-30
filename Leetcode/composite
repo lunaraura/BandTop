@@ -1,22 +1,81 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext("2d");
+const solid = "solid";
+const liquid = "liquid";
+const gas = "gas";
+const plasma = "plasma";
 
-//dictionary: composite, moveset
-//composite name: matter state, toughness, 
-const composites = { //maybe ranked 1 through 5
-    fire: {matter: plasma, tough: 5, elastic: 5, heatResist: 5, coldResist: -2, chemResist: 3},
-    water: {matter: liquid, tough: 5, elastic: 5, heatResist: -3, coldResist: -3, chemResist: 0},
-    lava: {matter: liquid, tough: 3, elastic: 2, heatResist: 5, coldRestist: -5, chemResist: 3},
-    stone: {matter: solid, tough: 2, elastic: 0, heatResist: 2, coldResist: 3, chemResist: 5},
-    crystalline: {matter: solid, tough: 0, elastic: 0, heatResist: 5, coldResist: 5, chemResist: 3},//can have very high variation except elastic & matter
-    organicAnimal: {matter: solid, tough: 3, elastic: 4, heatResist: -1, coldResist: -1, chemResist: -1},
-    organicPlant: {matter: solid, tough: 2, elastic: 4, heatResist: -3, coldResist: -3, chemResist: -2},
-}
-const species = {
-    canine: {}
-}
+//      const composites =
+//         what the monster is made up of: inner and outer composites
+//composite name: matter state, toughness against blunt force, hardness against piercing/slashing,
+//elastic against shock force/snap, heat/cold/chemical/electron resist, density slows down internal and external control force
+//      const moveType
+//          each move has values that affect composites
+//how much x breaks through a y resist before taking damage:
+//drill goes through 0.4 toughness, 0.3 hardness, and 0.8 elastic.
+//      const species =
+//          constitutes baseline composites with percentage change of variation
+//baseStats. size: species' size. maxHP: density * individual size.
+//physical atk = hardness * individual size. energy atk = energy * size.
+//speed & castspeed = hardfixed base number to species, scaling down with individual's size
+//defense = individual's outer layer composite (hardness + density + toughness) * size
+//energy defense = outer composite same thing but with fire/cold/chem/electric resists
+//      const speciesInnateVariation
 //t: tolerance center, r:range. 0 +dir, 1 is -direction
 //calculate innate with (random - tolerance) * range.
+const composites = {
+    stone:       {matter: solid,  tough: 0.30, hard: 0.8, energy: 0.0, elastic: 0.0, heatResist: 0.40, coldResist: 0.35, chemResist: 0.6,
+        electroResist: 1.0, density: 0.75, },
+    crystalline: {matter: solid,  tough: 0.15, hard: 0.9, energy: 0.0, elastic: 0.0, heatResist: 0.35, coldResist: 0.30, chemResist: 0.5,
+        electroResist: 1.0, density: 0.75, },
+    metal:       {matter: solid,  tough: 0.80, hard: 0.7, energy: 0.0, elastic: 0.2, heatResist: 0.45, coldResist: 0.50, chemResist: 0.55,
+        electroResist: 0.1, density: 0.75, },
+    //
+    organicAnimal:{matter: solid, tough: 0.60, hard: 0.2, energy: 0.3, elastic: 0.7, heatResist: 0.30, coldResist: 0.25, chemResist: 0.20,
+        electroResist: 0.3, density: 0.75, },
+    organicPlant: {matter: solid, tough: 0.40, hard: 0.3, energy: 0.5, elastic: 0.6, heatResist: 0.25, coldResist: 0.20, chemResist: 0.15,
+        electroResist: 0.4, density: 0.75, },
+    slime:       {matter: solid,  tough: 0.50, hard: 0.1, energy: 0.4, elastic: 1.0, heatResist: 0.30, coldResist: 0.30, chemResist: 0.15,
+        electroResist: 0.2, density: 0.75, },
+    //
+    water:       {matter: liquid, tough: 0.00, hard: 0.0, energy: 0.5, elastic: 1.0, heatResist: 0.8, coldResist: 0.10, chemResist: 0,
+        electroResist: 0.1, density: 0.75, },
+    lava:        {matter: liquid, tough: 0.60, hard: 0.2, energy: 0.7, elastic: 0.3, heatResist: 1.0, coldResist: 0.05, chemResist: 3,
+        electroResist: 0.6, density: 0.75, },
+    gas:         {matter: gas,    tough: 0.00, hard: 0.0, energy: 0.8, elastic: 1.0, heatResist: 0.2, coldResist: 0.10, chemResist: 0.3,
+        electroResist: 0.6, density: 0.75, },
+    fire:        {matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, heatResist: 1.0, coldResist: 0.0, chemResist: 0.9,
+        electroResist: 0.8, density: 0.75, },
+    frost:       {matter: gas,    tough: 0.00, hard: 0.1, energy: 1.0, elastic: 0.0, heatResist: 0.0, coldResist: 1.0, chemResist: 0.9,
+        electroResist: 0.8, density: 0.75, },
+    arcane:      {matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, heatResist: 1.0, coldResist: 0.0, chemResist: 0.9,
+        electroResist: 0.5, density: 0.75, },
+}
+const moveType = {
+    electric: {matter: plasma, electro: 1.0}, 
+    water: {matter: liquid, hard: 0.2, cold: 0.1},
+    fire: {matter: plasma, heat: 0.9},
+    cold: {matter: gas, cold: 0.9},
+    corrode: {matter: liquid, hard: 0.5, chemical: 0.6},
+    fumes: {matter: gas, chemical: 0.9},
+    smash: {matter: solid, tough: 0.9, hard: 0.1, elastic: 0.2}, 
+    slice: {matter: solid, tough: 0.1, hard: 0.9, elastic: 0.0},
+    shockwave: {matter: solid, tough: 0.5, hard: 0.1, elastic: 0.5},
+    drill: {matter: solid, tough: 0.2, hard: 0.1, elastic: 0.8},
+}
+const family = {
+    canine: {baseIn: {type: composites.organicAnimal, variation: 0.1}, baseOut: {type: composites.organicAnimal, variation: 0.2}},
+    feline: {baseIn: {type: composites.organicAnimal, variation: 0.1}, baseOut: {type: composites.organicAnimal, variation: 0.2}},
+    reptile: {baseIn: {type: composites.organicAnimal, variation: 0.1}, baseOut: {type: composites.organicAnimal, variation: 0.2}},
+    bird: {baseIn: {type: composites.organicAnimal, variation: 0.1}, baseOut: {type: composites.organicAnimal, variation: 0.2}},
+    bug: {baseIn: {type: composites.organicAnimal, variation: 0.1}, baseOut: {type: composites.organicAnimal, variation: 0.2}},
+    spectre: {baseIn: {type: composites.gas, variation: 0.0}, baseOut: {type: composites.gas, variation: 0.2}},
+    elemental: {baseIn: {type: composites.arcane, variation: 0.0}, baseOut: {type: composites.organicAnimal, variation: 1.0}},
+} 
+const species = {
+    dog: {famiy: family.canine, baseSize: 5},
+    wolf: {famiy: family.canine, baseSize: 5},
+}
 const speciesInnateVariation = {
     canine: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 0.5, r: 10},
         spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
@@ -34,12 +93,6 @@ const speciesInnateVariation = {
         spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
 }
 
-//species seperated from entitybuilding for cool variations
-function buildEntity(innerComposite, outerComposite, ){
-
-    return properties;
-}
-
 //base values from the species, allowed range for the certain species.
 //centerTolerance usually at 0.5 for -x to +x range.
 //can be 0 for (0 to x) range or 1 for (-x to 0) range
@@ -48,6 +101,61 @@ function buildInnate(baseValues, allowedRange, centerTolerance){
         valueBase += (Math.random() - centerTolerance) * allowedRange.valuesBase;
     })
 }
+function buildEntity(innerComposite, outerComposite, species, size) {
+    let properties = {
+        size: size,
+        mHP: outerComposite.density * size,
+        pAtk: outerComposite.hard * size,
+        eAtk: outerComposite.energy * size,
+        spd: Math.max(0.1, 1 / size), // Speed decreases with size
+        castSpd: Math.max(0.1, 1 / size), // Casting speed decreases with size
+        pdef: (outerComposite.hard + outerComposite.tough + outerComposite.density) * size,
+        edef: (outerComposite.heatResist + outerComposite.coldResist + outerComposite.chemResist + outerComposite.electroResist) * size,
+    };
+
+    // Apply species innate variation
+    if (speciesInnateVariation[species]) {
+        let variation = speciesInnateVariation[species];
+        Object.keys(variation).forEach(stat => {
+            let { t, r } = variation[stat];
+            properties[stat] += (Math.random() - t) * r;
+        });
+    }
+
+    return properties;
+}
+function rollComposites(species, seed){
+    let familyData = species.famiy;
+    let baseInner = familyData.baseIn.type;
+    let baseOuter = familyData.baseOut.type;
+    let innerComposite = { ...baseInner };
+    Object.keys(innerComposite).forEach(key => {
+        if (typeof innerComposite[key] === "number") {
+            let variation = familyData.baseIn.variation;
+            innerComposite[key] += (Math.random() - 0.5) * variation;
+        }
+    });
+    // Apply variation to the outer composite
+    let outerComposite = { ...baseOuter };
+    Object.keys(outerComposite).forEach(key => {
+        if (typeof outerComposite[key] === "number") {
+            let variation = familyData.baseOut.variation;
+            outerComposite[key] += (Math.random() - 0.5) * variation;
+        }
+    });
+    return { innerComposite, outerComposite };
+}
+function createEntity(species, seed){
+    let random;
+    if (!seed || seed > 1 || seed < 0) random = Math.random()
+    else random = seed;
+    let composites = rollComposites(species, random)
+    console.log(composites)
+}
+// Example usage:
+let entity1 = createEntity(species.dog, 0.1)
+console.log(entity1)
+
 
 class Entity {
     constructor (x, y){
