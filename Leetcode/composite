@@ -25,31 +25,31 @@ const plasma = "plasma";
 //calculate innate with (random - tolerance) * range.
 const composites = {
     stone:       {matter: solid,  tough: 0.30, hard: 0.8, energy: 0.0, elastic: 0.0, heatResist: 0.40, coldResist: 0.35, chemResist: 0.6,
-        electroResist: 1.0, density: 0.75, },
+        electroResist: 1.0, density: 0.75, name: "stone"},
     crystalline: {matter: solid,  tough: 0.15, hard: 0.9, energy: 0.0, elastic: 0.0, heatResist: 0.35, coldResist: 0.30, chemResist: 0.5,
-        electroResist: 1.0, density: 0.75, },
+        electroResist: 1.0, density: 0.75, name: "crystalline"},
     metal:       {matter: solid,  tough: 0.80, hard: 0.7, energy: 0.0, elastic: 0.2, heatResist: 0.45, coldResist: 0.50, chemResist: 0.55,
-        electroResist: 0.1, density: 0.75, },
+        electroResist: 0.1, density: 0.75, name: "metal"},
     //
     organicAnimal:{matter: solid, tough: 0.60, hard: 0.2, energy: 0.3, elastic: 0.7, heatResist: 0.30, coldResist: 0.25, chemResist: 0.20,
-        electroResist: 0.3, density: 0.75, },
+        electroResist: 0.3, density: 0.75, name: "organicAnimal"},
     organicPlant: {matter: solid, tough: 0.40, hard: 0.3, energy: 0.5, elastic: 0.6, heatResist: 0.25, coldResist: 0.20, chemResist: 0.15,
-        electroResist: 0.4, density: 0.75, },
+        electroResist: 0.4, density: 0.75, name: "organicPlant"},
     slime:       {matter: solid,  tough: 0.50, hard: 0.1, energy: 0.4, elastic: 1.0, heatResist: 0.30, coldResist: 0.30, chemResist: 0.15,
-        electroResist: 0.2, density: 0.75, },
+        electroResist: 0.2, density: 0.75, name: "slime"},
     //
     water:       {matter: liquid, tough: 0.00, hard: 0.0, energy: 0.5, elastic: 1.0, heatResist: 0.8, coldResist: 0.10, chemResist: 0,
-        electroResist: 0.1, density: 0.75, },
+        electroResist: 0.1, density: 0.75, name: "water"},
     lava:        {matter: liquid, tough: 0.60, hard: 0.2, energy: 0.7, elastic: 0.3, heatResist: 1.0, coldResist: 0.05, chemResist: 3,
-        electroResist: 0.6, density: 0.75, },
+        electroResist: 0.6, density: 0.75, name: "lava"},
     gas:         {matter: gas,    tough: 0.00, hard: 0.0, energy: 0.8, elastic: 1.0, heatResist: 0.2, coldResist: 0.10, chemResist: 0.3,
-        electroResist: 0.6, density: 0.75, },
+        electroResist: 0.6, density: 0.75, name: "gas"},
     fire:        {matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, heatResist: 1.0, coldResist: 0.0, chemResist: 0.9,
-        electroResist: 0.8, density: 0.75, },
+        electroResist: 0.8, density: 0.75, name: "fire"},
     frost:       {matter: gas,    tough: 0.00, hard: 0.1, energy: 1.0, elastic: 0.0, heatResist: 0.0, coldResist: 1.0, chemResist: 0.9,
-        electroResist: 0.8, density: 0.75, },
+        electroResist: 0.8, density: 0.75, name: "frost"},
     arcane:      {matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, heatResist: 1.0, coldResist: 0.0, chemResist: 0.9,
-        electroResist: 0.5, density: 0.75, },
+        electroResist: 0.5, density: 0.75, name: "arcane"},
 }
 const moveType = {
     electric: {matter: plasma, electro: 1.0}, 
@@ -73,8 +73,8 @@ const family = {
     elemental: {baseIn: {type: composites.arcane, variation: 0.0}, baseOut: {type: composites.organicAnimal, variation: 1.0}},
 } 
 const species = {
-    dog: {famiy: family.canine, baseSize: 5},
-    wolf: {famiy: family.canine, baseSize: 5},
+    dog: {name: "dog", family: family.canine, baseSize: 5},
+    wolf: {name: "wolf", family: family.canine, baseSize: 5},
 }
 const speciesInnateVariation = {
     canine: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 0.5, r: 10},
@@ -96,11 +96,6 @@ const speciesInnateVariation = {
 //base values from the species, allowed range for the certain species.
 //centerTolerance usually at 0.5 for -x to +x range.
 //can be 0 for (0 to x) range or 1 for (-x to 0) range
-function buildInnate(baseValues, allowedRange, centerTolerance){
-    Object.keys(baseValues).forEach((valueBase)=>{
-        valueBase += (Math.random() - centerTolerance) * allowedRange.valuesBase;
-    })
-}
 function buildEntity(innerComposite, outerComposite, species, size) {
     let properties = {
         size: size,
@@ -124,36 +119,81 @@ function buildEntity(innerComposite, outerComposite, species, size) {
 
     return properties;
 }
-function rollComposites(species, seed){
-    let familyData = species.famiy;
-    let baseInner = familyData.baseIn.type;
-    let baseOuter = familyData.baseOut.type;
-    let innerComposite = { ...baseInner };
-    Object.keys(innerComposite).forEach(key => {
-        if (typeof innerComposite[key] === "number") {
-            let variation = familyData.baseIn.variation;
-            innerComposite[key] += (Math.random() - 0.5) * variation;
-        }
-    });
-    // Apply variation to the outer composite
-    let outerComposite = { ...baseOuter };
-    Object.keys(outerComposite).forEach(key => {
-        if (typeof outerComposite[key] === "number") {
-            let variation = familyData.baseOut.variation;
-            outerComposite[key] += (Math.random() - 0.5) * variation;
-        }
-    });
-    return { innerComposite, outerComposite };
+const clamp01 = v => Math.max(0, Math.min(1, v));
+function rollCompositesForFamily(fam) {
+  const clampComposite = (obj, v) => {
+    const out = {...obj};
+    for (const k in out) if (typeof out[k] === 'number') out[k] = clamp01(out[k] + (Math.random()-0.5)*v);
+    return out;
+  };
+  const inner = clampComposite(fam.baseIn.type, fam.baseIn.variation);
+  const outer = clampComposite(fam.baseOut.type, fam.baseOut.variation);
+  return { innerComposite: inner, outerComposite: outer };
 }
-function createEntity(species, seed){
-    let random;
-    if (!seed || seed > 1 || seed < 0) random = Math.random()
-    else random = seed;
-    let composites = rollComposites(species, random)
-    console.log(composites)
+function buildInnate(base, varSpec){
+  const res = {};
+  for (const k in base){
+    const { t, r } = varSpec[k] || {t:0.5, r:0};
+    res[k] = base[k] + (Math.random() - t) * r;
+  }
+  return res;
 }
-// Example usage:
-let entity1 = createEntity(species.dog, 0.1)
+function deriveStats(inner, outer, speciesDef){
+  const size = speciesDef.baseSize ?? 5;
+
+  const mass   = (0.7*outer.density + 0.3*(inner.density ?? outer.density)) * size;
+  const hard   = 0.6*outer.hard   + 0.4*(inner.hard   ?? outer.hard);
+  const tough  = 0.7*outer.tough  + 0.3*(inner.tough  ?? outer.tough);
+  const energy = 0.7*outer.energy + 0.3*(inner.energy ?? outer.energy);
+  const elastic= 0.7*outer.elastic+ 0.3*(inner.elastic?? outer.elastic);
+
+  const baseHP   = speciesDef.baseHP   ?? 100;
+  const hp       = Math.round(baseHP + 30*mass + 10*tough);
+
+  const pAtk     = 5 + size*(0.8*hard + 0.4*tough); 
+  const eAtk     = 5 + size*(1.0*energy + 0.3*elastic);
+
+  const pDef     = 2 + size*(0.5*hard + 0.7*tough + 0.5*outer.density);
+  const eDefRaw  = (outer.heatResist + outer.coldResist + outer.chemResist + outer.electroResist);
+  const eDef     = 2 + size*(0.8*eDefRaw);
+
+  const baseSpd  = speciesDef.baseSpeed ?? 1.0;
+  const baseCast = speciesDef.baseCast  ?? 1.0;
+  const speed    = Math.max(0.25, baseSpd  * (1 / (1 + 0.18*size + 0.25*outer.density)) * (1 + 0.1*elastic));
+  const castSpd  = Math.max(0.25, baseCast * (1 / (1 + 0.12*size + 0.10*outer.density)) * (1 + 0.05*energy));
+
+  const kbResist = clamp01(0.5*outer.density + 0.4*tough);
+
+  return { size, hpMax: hp, hp, pAtk, eAtk, pDef, eDef, speed, castSpd, kbResist };
+}
+
+function createEntity(specDef, varMap){
+  const fam = specDef.family;
+  if (!fam) throw new Error(`Unknown family ${specDef.family}`);
+  const { innerComposite, outerComposite } = rollCompositesForFamily(fam);
+
+  let stats = deriveStats(innerComposite, outerComposite, specDef);
+
+  const famVar = varMap?.[specDef.family];
+  if (famVar){
+    const rolled = buildInnate(
+      { pAtk:stats.pAtk, eAtk:stats.eAtk, hpMax:stats.hpMax, speed:stats.speed, castSpd:stats.castSpd,
+        pDef:stats.pDef, eDef:stats.eDef },
+      { pAtk:famVar.pAtk, eAtk:famVar.eAtk, hpMax:famVar.mHP, spd:famVar.spd, castSpd:famVar.castSpd,
+        pDef:famVar.def,   eDef:famVar.def }
+    );
+    stats = { ...stats, ...rolled, hp: Math.min(rolled.hpMax ?? stats.hpMax, stats.hp) };
+  }
+
+  return {
+    species: specDef.name,
+    family : specDef.family,
+    innerComposite,
+    outerComposite,
+    ...stats,
+  };
+}
+const entity1 = createEntity(species.dog, family, speciesInnateVariation);
 console.log(entity1)
 
 
@@ -176,4 +216,3 @@ class Entity {
 
     }
 }
-
