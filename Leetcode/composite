@@ -1,10 +1,14 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext("2d");
 const globalSpeed = 10;
+const globalCSpeed = 100; //in ticks probably
 const solid = "solid";
 const liquid = "liquid";
 const gas = "gas";
 const plasma = "plasma";
+let drawing = [];
+let iteration = 0
+
 const composites = {
     stone:       {name: "stone", matter: solid,  tough: 0.30, hard: 0.8, energy: 0.0, elastic: 0.0, heatResist: 0.40, coldResist: 0.35, chemResist: 0.6,
         electroResist: 1.0, density: 0.75},
@@ -36,9 +40,10 @@ const composites = {
 //maybe if u supereffective the inner composite, monster faints ez
 const modusEncephalus = { //or not, prob wont be used
     organicBrain: [composites.organicAnimal, composites.organicPlant, composites.slime],
-    electroCPU: ["stone", "crystalline", "metal", "slime"],
-    arcane: ["stone", "crystalline", "metal", "organicAnimal",
-        "organicPlant", "slime", "lava", "gas", "fire", "frost", "arcane"],
+    electroCPU: [composites.stone, composites.crystalline, composites.metal,
+        composites.slime, composites.organicAnimal, composites.organicPlant],
+    arcane: [composites.stone, composites.crystalline, composites.metal, composites.organicAnimal, composites.organicPlant,
+        composites.slime, composites.lava, composites.gas, composites.fire, composites.frost, composites.arcane],
 }
 const moveType = {
     electric: {matter: plasma, electro: 1.0}, 
@@ -54,32 +59,35 @@ const moveType = {
 }
 const family = {
     canine: {baseIn: {type: composites.organicAnimal, variation: 0.3}, baseOut: {type: composites.organicAnimal, variation: 0.2}, modus: modusEncephalus.organicBrain},
-    feline: {baseIn: {type: composites.organicAnimal, variation: 0.05}, baseOut: {type: composites.organicAnimal, variation: 0.2}, modus: modusEncephalus.organicBrain},
-    reptile: {baseIn: {type: composites.organicAnimal, variation: 0.05}, baseOut: {type: composites.organicAnimal, variation: 0.2}, modus: modusEncephalus.organicBrain},
+    feline: {baseIn: {type: composites.organicAnimal, variation: 0.05}, baseOut: {type: composites.organicAnimal, variation: 0.1}, modus: modusEncephalus.organicBrain},
+    reptile: {baseIn: {type: composites.organicAnimal, variation: 0.05}, baseOut: {type: composites.organicAnimal, variation: 0.1}, modus: modusEncephalus.organicBrain},
     bird: {baseIn: {type: composites.organicAnimal, variation: 0.05}, baseOut: {type: composites.organicAnimal, variation: 0.2}, modus: modusEncephalus.organicBrain},
     bug: {baseIn: {type: composites.organicAnimal, variation: 0.05}, baseOut: {type: composites.organicAnimal, variation: 0.2}, modus: modusEncephalus.organicBrain},
     spectre: {baseIn: {type: composites.gas, variation: 0.0}, baseOut: {type: composites.gas, variation: 0.2}, modus: modusEncephalus.arcane},
     elemental: {baseIn: {type: composites.arcane, variation: 0.0}, baseOut: {type: composites.organicAnimal, variation: 1.0}, modus: modusEncephalus.arcane},
+    mecha: {baseIn: {type: composites.metal, variation: 0.1}, baseOut: {type: composites.metal, variation: 0.1}, modus: modusEncephalus.electroCPU},
 } 
 const species = {
-    dog: {name: "dog", family: family.canine, baseSize: 5},
-    wolf: {name: "wolf", family: family.canine, baseSize: 5},
+    houseDog: {name: "House Dog", family: family.canine, baseSize: 5},
+    houseCat: {name: "House Cat", family: family.feline, baseSize: 3},
+    wolf: {name: "Wolf", family: family.canine, baseSize: 6},
+    mechBird: {name: "Mecha Bird", family: family.bird, baseSize: 15},
 }
 const speciesInnateVariation = {
-    canine: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 0.5, r: 10},
-        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
-    feline: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 0.5, r: 10},
-        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
-    reptile: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 0.5, r: 10},
-        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
-    bird: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 1, r: 10},
-        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
-    bug: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 1, r: 10},
-        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
-    spectre: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 1, r: 10},
-        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
-    elemental: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, mHP: {t: 1, r: 10},
-        spd: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    canine: {pAtk:{t: 0.5, r: 10}, eAtk:{t: 0, r: 1}, maxHP: {t: 0.5, r: 20},
+        speed: {t: 0, r: 2}, def: {t: 0.5, r: 2}, castSpd: {t: 0.5, r: 1}},
+    feline: {pAtk:{t: 0.5, r: 10}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 0.5, r: 15},
+        speed: {t: 0.5, r: 5}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    reptile: {pAtk:{t: 0.5, r: 20}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 0.5, r: 10},
+        speed: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    bird: {pAtk:{t: 1, r: 10}, eAtk:{t: 0, r: 10}, maxHP: {t: 1, r: 10},
+        speed: {t: 0.5, r: 10}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    bug: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 1, r: 10},
+        speed: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    spectre: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 1, r: 10},
+        speed: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    elemental: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 1, r: 10},
+        speed: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
 }
 function makeRNG(seed=123456789){
     let s = seed >>> 0;
@@ -103,15 +111,26 @@ function generateEntity(species) {
 
     let rolledInner = rollCompositeType(originalIn, thresholdIn, random, modus);
     let rolledOuter = rollCompositeType(originalOut, thresholdOut, random, composites);
-
+    const familyName = Object.keys(family).find(key => family[key] === species.family);
+    const innateVariation = speciesInnateVariation[familyName];
+    if (!innateVariation) {
+        console.error(`No innate variation found for family: ${familyName}`);
+        return null;
+    }
     const entitySize = species.baseSize;
     const stats = inheritBaseStats(rolledInner, rolledOuter, entitySize);
+    const finalStats = addInnateStats(stats, innateVariation)
+    console.log(stats)
+    console.log(finalStats)
+    //for draw
+    draw(species.baseSize, finalStats)
+    //
 
     return {
         species: species.name,
         innerComposite: rolledInner,
         outerComposite: rolledOuter,
-        stats: stats,
+        stats: finalStats,
     };
 }
 //later, might use "exclude: [x, y, z]" properties or
@@ -141,17 +160,43 @@ function inheritBaseStats(innerComposite, outerComposite, entitySize, globalSpee
     const def = defenseCalc(innerComposite, entitySize) + defenseCalc(outerComposite, entitySize);
     const res = resistCalc(innerComposite, entitySize) + resistCalc(outerComposite, entitySize);
     const speed = globalSpeed / entitySize;
-    console.log(maxHP)
+    const castSpd = globalCSpeed * (entitySize/2);
     return {
-        maxHP: Math.max(0, maxHP),
-        pAtk: Math.max(0, pAtk),
-        eAtk: Math.max(0, eAtk),
-        def: Math.max(0, def),
-        res: Math.max(0, res),
-        speed: Math.max(0.1, speed),
+        maxHP: Math.max(0, maxHP.toFixed(3)),
+        pAtk: Math.max(0, pAtk.toFixed(3)),
+        eAtk: Math.max(0, eAtk.toFixed(3)),
+        def: Math.max(0, def.toFixed(3)),
+        res: Math.max(0, res.toFixed(3)),
+        speed: Math.max(0.1, speed.toFixed(3)),
+        castSpd: Math.max(0.1, castSpd.toFixed(3)),
     };
 }
-let dogEntity = generateEntity(species.dog);
-console.log(dogEntity);
-console.log(dogEntity.innerComposite)
-console.log(dogEntity.outerComposite)
+function addInnateStats(stats, vari){ //should be mostly linear addition
+    let add = {
+        maxHP: (Math.random() - vari.maxHP.t) * vari.maxHP.r,
+        pAtk: (Math.random() - vari.pAtk.t) * vari.pAtk.r,
+        eAtk: (Math.random() - vari.eAtk.t) * vari.eAtk.r,
+        def: (Math.random() - vari.def.t) * vari.def.r,
+        speed: (Math.random() - vari.speed.t) * vari.speed.r,
+        castSpd: (Math.random() - vari.castSpd.t) * vari.castSpd.r,
+    }
+    return {
+        maxHP: Math.max(0, (stats.maxHP + add.maxHP).toFixed(3)),
+        pAtk: Math.max(0, (stats.pAtk + add.pAtk).toFixed(3)),
+        eAtk: Math.max(0, (stats.eAtk + add.eAtk).toFixed(3)),
+        def: Math.max(0, (stats.def + add.def).toFixed(3)),
+        res: Math.max(0, (stats.res)),
+        speed: Math.max(0.1, (stats.speed + add.speed).toFixed(3)),
+        castSpd: Math.max(0.1, Math.round(stats.castSpd + add.castSpd)),
+    }
+}
+let dogEntity = generateEntity(species.houseDog);
+let catEntity = generateEntity(species.houseCat);
+let mechBird = generateEntity(species.mechBird);
+
+function draw(size, stats){
+    ctx.fillRect(iteration, iteration, size, size)
+    ctx.fillText(Math.round(stats.maxHP) + ", MaxHP", iteration + 5 + size, iteration+10);
+    ctx.fillText(Math.round(stats.pAtk) + ", phys atk", iteration + 10 + size, iteration+20);
+    iteration += size + 20
+}
