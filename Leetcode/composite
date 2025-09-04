@@ -9,6 +9,13 @@ const plasma = "plasma";
 let drawing = [];
 let entityList = []
 let iteration = 0
+//composite dictionary for monster makeup
+//modus dictionary for monster brain: decides pool of composites
+//moveType dictionary for dmg/energy ability makeup
+//move dictionary for ability
+//family for broad group of monsters
+//species for more specific group of monsters
+//
 
 const composites = {
     stone:       {name: "stone", matter: solid,  tough: 0.30, hard: 0.8, energy: 0.0, elastic: 0.0, heatResist: 0.40, coldResist: 0.35, chemResist: 0.6,
@@ -46,17 +53,34 @@ const modusEncephalus = { //or not, prob wont be used
     arcane: [composites.stone, composites.crystalline, composites.metal, composites.organicAnimal, composites.organicPlant,
         composites.slime, composites.lava, composites.gas, composites.fire, composites.frost, composites.arcane],
 }
+//how much it bypasses x resistance: if enemy monster (size 1) has 0.5 electric resist,
+//a move with damage of 1 will use 1 whole resistance. It ends with 0.5 damage.
+//probably.
 const moveType = {
+    light: {matter: plasma, electro: 0.3, heat: 0.3},
     electric: {matter: plasma, electro: 1.0}, 
     water: {matter: liquid, hard: 0.2, cold: 0.1},
     fire: {matter: plasma, heat: 0.9},
-    cold: {matter: gas, cold: 0.9},
+    ice: {matter: solid, cold: 0.9},
+    wind: {matter: gas, cold: 0.3, elastic: 0.3},
     corrode: {matter: liquid, hard: 0.5, chemical: 0.6},
     fumes: {matter: gas, chemical: 0.9},
     smash: {matter: solid, tough: 0.9, hard: 0.1, elastic: 0.2}, 
     slice: {matter: solid, tough: 0.1, hard: 0.9, elastic: 0.0},
     shockwave: {matter: solid, tough: 0.5, hard: 0.1, elastic: 0.5},
     drill: {matter: solid, tough: 0.2, hard: 0.1, elastic: 0.8},
+}
+const moves = {
+    air_slice: {baseDmg: 10, types: [moveType.slice, moveType.cold], rangeType: "projectile", projSpeed: 10, 
+        falloffStart: 20, rangeEnd: 50, baseCD: 120},
+    bite: {baseDmg: 5, types: [moveType.drill], rangeType:"melee", baseCD: 30},
+    burn: {baseDmg: 10, types: [moveType.fire, moveType.cold], rangeType: "projectile", projSpeed: 5,
+        falloffStart: 5, rangeEnd: 10, baseCD: 50},
+    chill: {baseDmg: 10, types: [moveType.wind], rangeType: "area",
+        falloffStart: 5, rangeEnd: 20, baseCD: 30},
+    light_blast: {baseDmg: 30, types: [moveType.electric]}
+    zap: {baseDmg: 20, types: [moveType.electric], rangeType: "hitscan",
+        falloffStart: 0, rangeEnd: 20, baseCD: 100},
 }
 const family = {
     canine: {baseIn: {type: composites.organicAnimal, variation: 0.3}, baseOut: {type: composites.organicAnimal, variation: 0.2}, modus: modusEncephalus.organicBrain},
@@ -75,21 +99,21 @@ const species = {
     bird: {name: "Bird", family: family.canine, baseSize: 1},
     mechBird: {name: "Mecha Bird", family: family.bird, baseSize: 15},
 }
-const speciesInnateVariation = {
+const familyInnateVariation = {
     canine: {pAtk:{t: 0.5, r: 10}, eAtk:{t: 0, r: 1}, maxHP: {t: 0.5, r: 20},
         speed: {t: 0, r: 2}, def: {t: 0.5, r: 2}, castSpd: {t: 0.5, r: 1}},
     feline: {pAtk:{t: 0.5, r: 10}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 0.5, r: 15},
-        speed: {t: 0.5, r: 5}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+        speed: {t: 0, r: 4}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
     reptile: {pAtk:{t: 0.5, r: 20}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 0.5, r: 10},
         speed: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
     bird: {pAtk:{t: 1, r: 10}, eAtk:{t: 0, r: 10}, maxHP: {t: 1, r: 10},
-        speed: {t: 0.5, r: 10}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+        speed: {t: 0, r: 10}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
     bug: {pAtk:{t: 0.5, r: 5}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 1, r: 10},
-        speed: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+        speed: {t: 0, r: 4}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
     spectre: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 1, r: 10},
-        speed: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+        speed: {t: 0, r: 10}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
     elemental: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 1, r: 10},
-        speed: {t: 0.5, r: 1}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+        speed: {t: 0, r: 5}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
 }
 function makeRNG(seed=123456789){
     let s = seed >>> 0;
@@ -133,7 +157,7 @@ class Entity{
         let rolledInner = this.rollCompositeType(originalIn, thresholdIn, random, modus);
         let rolledOuter = this.rollCompositeType(originalOut, thresholdOut, random, composites);
         const familyName = Object.keys(family).find(key => family[key] === species.family);
-        const innateVariation = speciesInnateVariation[familyName];
+        const innateVariation = familyInnateVariation[familyName];
         if (!innateVariation) {
             console.error(`No innate variation found for family: ${familyName}`);
             return null;
@@ -272,7 +296,6 @@ class Entity{
         this.checkAlive();
     }
 }
-
 
 let dogEntity = new Entity(species.houseDog, 20, 20, 5);
 let catEntity = new Entity(species.houseCat, 80, 50, 5);
