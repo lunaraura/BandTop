@@ -18,32 +18,32 @@ let iteration = 0
 //
 
 const composites = {
-    stone:       {name: "stone", matter: solid,  tough: 0.30, hard: 0.8, energy: 0.0, elastic: 0.0, heatResist: 0.40, coldResist: 0.35, chemResist: 0.6,
-        electroResist: 1.0, density: 0.75},
-    crystalline: {name: "crystalline", matter: solid,  tough: 0.15, hard: 0.9, energy: 0.0, elastic: 0.0, heatResist: 0.35, coldResist: 0.30, chemResist: 0.5,
-        electroResist: 1.0, density: 0.75},
-    metal:       {name: "metal", matter: solid,  tough: 0.80, hard: 0.7, energy: 0.0, elastic: 0.2, heatResist: 0.45, coldResist: 0.50, chemResist: 0.55,
-        electroResist: 0.1, density: 0.75},
+    stone:       {name: "stone", matter: solid,  tough: 0.30, hard: 0.8, energy: 0.0, elastic: 0.0, tempBaseline: 0.5, chemResist: 0.6,
+        electroResist: 1.0, density: 0.9, porosity: 0.0,  thermCond: 0.05, electCond: 0.1},
+    crystalline: {name: "crystalline", matter: solid,  tough: 0.15, hard: 0.9, energy: 0.0, elastic: 0.0, tempBaseline: 0.5, chemResist: 0.5,
+        electroResist: 1.0, density: 0.8, porosity: 0.0,  thermCond: 0.05, electCond: 0.5},
+    metal:       {name: "metal", matter: solid,  tough: 0.80, hard: 0.7, energy: 0.0, elastic: 0.2, tempBaseline: 0.5, chemResist: 0.55,
+        electroResist: 0.1, density: 0.95, porosity: 0.05,  thermCond: 1.0, electCond: 0.95},
     //
-    organicAnimal:{name: "organicAnimal", matter: solid, tough: 0.60, hard: 0.3, energy: 0.2, elastic: 0.7, heatResist: 0.30, coldResist: 0.25, chemResist: 0.20,
-        electroResist: 0.3, density: 0.75},
-    organicPlant: {name: "organicPlant", matter: solid, tough: 0.40, hard: 0.5, energy: 0.4, elastic: 0.6, heatResist: 0.25, coldResist: 0.20, chemResist: 0.15,
-        electroResist: 0.4, density: 0.75},
-    slime:       {name: "slime", matter: solid, tough: 0.50, hard: 0.1, energy: 0.4, elastic: 1.0, heatResist: 0.30, coldResist: 0.30, chemResist: 0.15,
-        electroResist: 0.2, density: 0.75},
+    organicAnimal:{name: "organicAnimal", matter: solid, tough: 0.60, hard: 0.3, energy: 0.2, elastic: 0.7, tempBaseline: 0.5, chemResist: 0.20,
+        electroResist: 0.3, density: 0.6, porosity: 0.5,  thermCond: 0.4, electCond: 0.45},
+    organicPlant: {name: "organicPlant", matter: solid, tough: 0.40, hard: 0.5, energy: 0.4, elastic: 0.6, tempBaseline: 0.45, chemResist: 0.15,
+        electroResist: 0.4, density: 0.55, porosity: 0.3,  thermCond: 0.3, electCond: 0.4},
+    slime:       {name: "slime", matter: solid, tough: 0.50, hard: 0.1, energy: 0.4, elastic: 1.0, tempBaseline: 0.4, chemResist: 0.15,
+        electroResist: 0.2, density: 0.4, porosity: 0.6,  thermCond: 0.6, electCond: 0.5},
     //
-    water:       {name: "water", matter: liquid, tough: 0.00, hard: 0.0, energy: 0.5, elastic: 1.0, heatResist: 0.8, coldResist: 0.10, chemResist: 0,
-        electroResist: 0.1, density: 0.75},
-    lava:        {name: "lava", matter: liquid, tough: 0.60, hard: 0.2, energy: 0.7, elastic: 0.3, heatResist: 1.0, coldResist: 0.05, chemResist: 3,
-        electroResist: 0.6, density: 0.75},
-    gas:         {name: "gas", matter: gas, tough: 0.00, hard: 0.0, energy: 0.8, elastic: 1.0, heatResist: 0.2, coldResist: 0.10, chemResist: 0.3,
-        electroResist: 0.6, density: 0.75},
-    fire:        {name: "fire", matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, heatResist: 1.0, coldResist: 0.0, chemResist: 0.9,
-        electroResist: 0.8, density: 0.75},
-    frost:       {name: "frost", matter: gas, tough: 0.00, hard: 0.1, energy: 1.0, elastic: 0.0, heatResist: 0.0, coldResist: 1.0, chemResist: 0.9,
-        electroResist: 0.8, density: 0.75},
-    arcane:      {name: "arcane", matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, heatResist: 1.0, coldResist: 0.0, chemResist: 0.9,
-        electroResist: 0.5, density: 0.75},
+    water:       {name: "water", matter: liquid, tough: 0.00, hard: 0.0, energy: 0.5, elastic: 1.0, tempBaseline: 0.45, chemResist: 0,
+        electroResist: 0.1, density: 0.5, porosity: 0.2,  thermCond: 0.9, electCond: 0.9},
+    lava:        {name: "lava", matter: liquid, tough: 0.60, hard: 0.2, energy: 0.7, elastic: 0.3, tempBaseline: 1.0, chemResist: .3,
+        electroResist: 0.6, density: 0.85, porosity: 0.4,  thermCond: 0.1, electCond: 0.1},
+    gas:         {name: "gas", matter: gas, tough: 0.00, hard: 0.0, energy: 0.8, elastic: 1.0, tempBaseline: 0.6, chemResist: 0.3,
+        electroResist: 0.6, density: 0.05, porosity: 0.0,  thermCond: 0.1, electCond: 0.05},
+    fire:        {name: "fire", matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, tempBaseline: 1.0, chemResist: 0.9,
+        electroResist: 0.8, density: 0.02, porosity: 0.0,  thermCond: 0.0, electCond: 0.05},
+    frost:       {name: "frost", matter: gas, tough: 0.00, hard: 0.1, energy: 1.0, elastic: 0.0, tempBaseline: 0.0, chemResist: 0.9,
+        electroResist: 0.8, density: 0.06, porosity: 0.0,  thermCond: 0.0, electCond: 0.05},
+    arcane:      {name: "arcane", matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, tempBaseline: 1.0, chemResist: 0.9,
+        electroResist: 0.5, density: 0.1, porosity: 0.0,  thermCond: 0.0, electCond: 0.3},
 }
 //maybe if u supereffective the inner composite, monster faints ez
 const modusEncephalus = { //or not, prob wont be used
@@ -58,17 +58,17 @@ const modusEncephalus = { //or not, prob wont be used
 //probably.
 const moveType = {
     light: {matter: plasma, electro: 0.3, heat: 0.3},
-    electric: {matter: plasma, electro: 1.0}, 
-    water: {matter: liquid, hard: 0.2, cold: 0.1},
-    fire: {matter: plasma, heat: 0.9},
-    ice: {matter: solid, cold: 0.9},
-    wind: {matter: gas, cold: 0.3, elastic: 0.3},
-    corrode: {matter: liquid, hard: 0.5, chemical: 0.6},
-    fumes: {matter: gas, chemical: 0.9},
-    smash: {matter: solid, tough: 0.9, hard: 0.1, elastic: 0.2}, 
-    slice: {matter: solid, tough: 0.1, hard: 0.9, elastic: 0.0},
-    shockwave: {matter: solid, tough: 0.5, hard: 0.1, elastic: 0.5},
-    drill: {matter: solid, tough: 0.2, hard: 0.1, elastic: 0.8},
+    electric: {matter: plasma, dmgElectro: 1.0}, 
+    water: {matter: liquid, dmgHard: 0.2, dmgCold: 0.1},
+    fire: {matter: plasma, dmgHeat: 0.9},
+    ice: {matter: solid, dmgCold: 0.9},
+    wind: {matter: gas, dmgCold: 0.3, dmgElastic: 0.3},
+    corrode: {matter: liquid, dmgHard: 0.5, dmgChem: 0.6},
+    fumes: {matter: gas, dmgChem: 0.7},
+    smash: {matter: solid, dmgTough: 0.9, dmgHard: 0.1, dmgElastic: 0.2}, 
+    slice: {matter: solid, dmgTough: 0.1, dmgHard: 0.9, dmgElastic: 0.0},
+    shockwave: {matter: solid, dmgTough: 0.5, dmgHard: 0.1, dmgElastic: 0.5},
+    drill: {matter: solid, dmgTough: 0.2, dmgHard: 0.1, dmgElastic: 0.8},
 }
 const moves = {
     air_slice: {baseDmg: 10, types: [moveType.slice, moveType.cold], rangeType: "projectile", projSpeed: 10, 
@@ -78,7 +78,7 @@ const moves = {
         falloffStart: 5, rangeEnd: 10, baseCD: 50},
     chill: {baseDmg: 10, types: [moveType.wind], rangeType: "area",
         falloffStart: 5, rangeEnd: 20, baseCD: 30},
-    light_blast: {baseDmg: 30, types: [moveType.electric]}
+    light_blast: {baseDmg: 30, types: [moveType.electric]},
     zap: {baseDmg: 20, types: [moveType.electric], rangeType: "hitscan",
         falloffStart: 0, rangeEnd: 20, baseCD: 100},
 }
@@ -96,7 +96,7 @@ const species = {
     houseDog: {name: "Dog", family: family.canine, baseSize: 5},
     houseCat: {name: "Cat", family: family.feline, baseSize: 3},
     wolf: {name: "Wolf", family: family.canine, baseSize: 6},
-    bird: {name: "Bird", family: family.canine, baseSize: 1},
+    bird: {name: "Bird", family: family.bird, baseSize: 1},
     mechBird: {name: "Mecha Bird", family: family.bird, baseSize: 15},
 }
 const familyInnateVariation = {
@@ -115,6 +115,67 @@ const familyInnateVariation = {
     elemental: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 1, r: 10},
         speed: {t: 0, r: 5}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
 }
+function clamp01(v){ return Math.max(0, Math.min(1, v))}
+function soakBuilder(inner, outer, size) {
+    const wO = 0.7, wI = 0.3;
+    const mix = (k, def = 0.5) =>
+        wO * (outer?.[k] ?? def + wI * inner?.[k] ?? outer?.[k] ??def)
+    const porosity = clamp01(mix('porosity', 0.3))
+    const density = clamp01(mix('density', 0.6))
+    const thermalCond = clamp01(mix('thermCond', 0.5))
+    const electroCond = clamp01(mix('electCond', 0.3))
+    const tBase = clamp01(mix('tempBaseline', 0.5))
+    const capBase = 10 * size; //capacityBase
+    const maxContainWater = capBase + (0.6+porosity + 0.2*(1-density) + 0.2)
+    const maxContainChem = capBase + (0.5+porosity + 0.2*(1-density) + 0.3)
+    const maxContainCharge = capBase + (0.6*electroCond + 0.2*(1-porosity) + 0.2)
+    const maxContainArcane = capBase + (0.2*(1-electroCond) + 0.2*(1-density) + 0.6)
+    const thermalMass = 0.4*thermalCond + 0.4*density + 0.2;
+    const maxContainHot = capBase * thermalMass * (0.2 + 0.8*(1-tBase))
+    const maxContainCold = capBase * thermalMass * (0.2 + 0.8*(tBase))
+
+    const leakWater = 0.3 + 0.18*porosity;
+    const leakChem = 0.2 + 0.14*porosity;
+    const leakCharge = 0.2 + 0.2*electroCond;
+    const leakHot = 0.2 + 0.18*thermalCond;
+    const leakCold = 0.2 + 0.18*thermalCond;
+
+    return {
+        caps: {
+            waterMax: maxContainWater, chemMax:maxContainChem,
+            chargeMax: maxContainCharge, hotMax: maxContainHot,
+            coldMax: maxContainCold, arcaneMax: maxContainArcane
+        },
+        leaks: {
+            water:leakWater, chem:leakChem, charge:leakCharge,
+            hot: leakHot, cold:leakCold
+        }
+    }
+}
+function moveEffects(move, target, wasMelee = false){ //arguments could be the Move itself after its cast and the entity it affects
+    const O = target.outerCOmposite, I = target.innerComposite;
+    const por = 0.7*(O.porosity||0) + 0.3 *(I.porosity||0);
+    const den = 0.7*(O.density||0) + 0.3 *(I.density||0);
+    const tK = 0.7*(O.thermCond||0) + 0.3 *(I.thermCond||0);
+    const eK = 0.7*(O.electCond||0) + 0.3 *(I.electCond||0);
+    
+    const injectMultiplier = 1
+    const hadASolid = false;
+    //for each move type in move:
+    switch(moveType.matter){
+        case solid:
+            injectMultiplier = 4;
+            hadASolid = true;
+        case liquid:
+            injectMultiplier = 3;
+        case gas:
+            injectMultiplier = 2;
+        case plasma:
+            injectMultiplier = 1;
+    }
+
+
+}
 function makeRNG(seed=123456789){
     let s = seed >>> 0;
     return function rand(){
@@ -124,21 +185,25 @@ function makeRNG(seed=123456789){
         return (s >>> 0) / 0xFFFFFFFF
     }
 }
-
 class Entity{
     constructor(species, x, y, extraSize = 0){
         this.x = x;
         this.y = y;
-
-        //
+        //stats
         this.originalStats = null;
         this.size = species.baseSize + extraSize;
         this.HP = null; this.maxHP = null;
         this.pAtk = null; this.eAtk = null;
-        this.def = null; this.res = null;
-        this.speed = null; this.castSpd = null;
+        this.def = null; this.speed = null;
+        this.castSpd = null;
+        // resists
+        this.heatResist = 0; this.coldResist = 0;
+        this.chemResist = 0; this.electroResist = 0;
+        this.maxContain = 0;
+        this.containCold = 0; this.containHeat = 0;
+        this.containTox = 0; this.containWater = 0;
+        this.containCharge = 0; this.containArcane = 0;
         //
-        
         this.species = species.name;
         this.generateEntity(species)
         entityList.push(this)
@@ -171,7 +236,7 @@ class Entity{
         this.species = species.name
         this.innerComposite = rolledInner;
         this.outerComposite = rolledOuter;
-        this.originalStats = finalStats
+        this.originalStats = finalStats;
         this.setStats(finalStats)
     }
     rollCompositeType(baseComposite, variation, random, compositePool) {
@@ -181,7 +246,6 @@ class Entity{
             );
             const newComposite =
                 availableComposites[Math.floor(Math.random() * availableComposites.length)];
-
             return { ...newComposite };
         }
         return { ...baseComposite };
@@ -190,14 +254,15 @@ class Entity{
         const healthCalc = (comp, size) => (comp.tough + comp.hard + comp.elastic) * size;
         const physAtkCalc = (comp, size) => (comp.hard + comp.tough) * size;
         const energAtkCalc = (comp, size) => comp.energy * size;
-        const defenseCalc = (comp, size) => comp.tough * size;
-        const resistCalc = (comp, size) => ((comp.heatResist + comp.coldResist + comp.chemResist + comp.electroResist) / 4) * size;
+        const defenseCalc = (comp, size) => (comp.tough + comp.density) * size;
+        const resistCalc = (comp, size) => Math.max(0,(comp.density - comp.porosity)) * size;
 
         const maxHP = healthCalc(innerComposite, entitySize) + healthCalc(outerComposite, entitySize);
         const pAtk = physAtkCalc(innerComposite, entitySize) + physAtkCalc(outerComposite, entitySize);
         const eAtk = energAtkCalc(innerComposite, entitySize) + energAtkCalc(outerComposite, entitySize);
-        const def = defenseCalc(innerComposite, entitySize) + defenseCalc(outerComposite, entitySize);
-        const res = resistCalc(innerComposite, entitySize) + resistCalc(outerComposite, entitySize);
+        const def = defenseCalc(outerComposite, entitySize);
+        const capacity = soakBuilder(innerComposite, outerComposite, entitySize);
+        const res = resistCalc(outerComposite, entitySize) + resistCalc(outerComposite, entitySize);
         const speed = globalSpeed / entitySize;
         const castSpd = globalCSpeed * (entitySize/2);
         return {
@@ -205,10 +270,13 @@ class Entity{
             pAtk: Math.max(0, pAtk.toFixed(3)),
             eAtk: Math.max(0, eAtk.toFixed(3)),
             def: Math.max(0, def.toFixed(3)),
-            res: Math.max(0, res.toFixed(3)),
+            res: res,
+            capacity: capacity,
             speed: Math.max(0.1, speed.toFixed(3)),
             castSpd: Math.max(0.1, castSpd.toFixed(3)),
         };
+    }
+    reduceByContains(){
     }
     addInnateStats(stats, vari){ //should be mostly linear addition
         let add = {
@@ -230,6 +298,7 @@ class Entity{
         }
     }
     setStats(stat){
+        this.maxContain = this.size * (this.innerComposite.density + this.outerComposite.density)
         this.maxHP = stat.maxHP; this.HP = stat.maxHP;
         this.pAtk = stat.pAtk; this.eAtk = stat.eAtk;
         this.def = stat.def; this.res = stat.res;
