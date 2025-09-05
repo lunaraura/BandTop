@@ -7,6 +7,7 @@ const liquid = "liquid";
 const gas = "gas";
 const plasma = "plasma";
 let drawing = [];
+let botList = []
 let entityList = []
 let projectileList = [];
 let iteration = 0
@@ -46,17 +47,13 @@ const composites = {
     arcane:      {name: "arcane", matter: plasma, tough: 0.00, hard: 0.0, energy: 0.9, elastic: 1.0, tempBaseline: 1.0, chemResist: 0.9,
         electroResist: 0.5, density: 0.1, porosity: 0.0,  thermCond: 0.0, electCond: 0.3},
 }
-//maybe if u supereffective the inner composite, monster faints ez
-const modusEncephalus = { //or not, prob wont be used
+const modusEncephalus = {
     organicBrain: [composites.organicAnimal, composites.organicPlant, composites.slime],
     electroCPU: [composites.stone, composites.crystalline, composites.metal,
         composites.slime, composites.organicAnimal, composites.organicPlant],
     arcane: [composites.stone, composites.crystalline, composites.metal, composites.organicAnimal, composites.organicPlant,
         composites.slime, composites.lava, composites.gas, composites.fire, composites.frost, composites.arcane],
 }
-//how much it bypasses x resistance: if enemy monster (size 1) has 0.5 electric resist,
-//a move with damage of 1 will use 1 whole resistance. It ends with 0.5 damage.
-//probably.
 const moveType = {
     light: {matter: plasma, electro: 0.3, heat: 0.3},
     electric: {matter: plasma, dmgElectro: 1.0}, 
@@ -99,7 +96,7 @@ const species = {
     houseCat: {name: "Cat", family: family.feline, baseSize: 6},
     wolf: {name: "Wolf", family: family.canine, baseSize: 12},
     bird: {name: "Bird", family: family.bird, baseSize: 3},
-    mechBird: {name: "Mecha Bird", family: family.bird, baseSize: 15},
+    mechBird: {name: "Mecha Bird", family: family.bird, baseSize: 20},
 }
 const familyInnateVariation = {
     canine: {pAtk:{t: 0.5, r: 10}, eAtk:{t: 0, r: 1}, maxHP: {t: 0.5, r: 20},
@@ -120,7 +117,6 @@ const familyInnateVariation = {
 function clamp01(v){ return Math.max(0, Math.min(1, v))}
 function soakBuilder(inner, outer, size) {
     const wO = 0.7, wI = 0.3;
-
     const mix = (k, def = 0.5) =>
     wO * (outer?.[k] ?? def) + wI * (inner?.[k] ?? outer?.[k] ?? def);
     const porosity = clamp01(mix('porosity', 0.3))
@@ -133,17 +129,14 @@ function soakBuilder(inner, outer, size) {
     const maxContainChem   = capBase * (0.5*porosity + 0.2*(1-density) + 0.3);
     const maxContainCharge = capBase * (0.6*electroCond + 0.2*(1-porosity) + 0.2);
     const maxContainArcane = capBase * (0.2*(1-electroCond) + 0.2*(1-density) + 0.6);
-
     const thermalMass = 0.4*thermalCond + 0.4*density + 0.2;
     const maxContainHot = capBase * thermalMass * (0.2 + 0.8*(1-tBase))
     const maxContainCold = capBase * thermalMass * (0.2 + 0.8*(tBase))
-
     const leakWater = 0.3 + 0.18*porosity;
     const leakChem = 0.2 + 0.14*porosity;
     const leakCharge = 0.2 + 0.2*electroCond;
     const leakHot = 0.2 + 0.18*thermalCond;
     const leakCold = 0.2 + 0.18*thermalCond;
-
     return {
         caps: {
             waterMax: maxContainWater, chemMax:maxContainChem,
@@ -195,16 +188,12 @@ function projectileLoop(){
     ctx.fillRect(p.x, p.y, 3, 3)
   }
 }
-
 function moveEffects(move, target, wasMelee = false){
-  const O = target.outerComposite;
-  const I = target.innerComposite;
-
+//   const O = target.outerComposite;
+//   const I = target.innerComposite;
   const matter = (move.types?.[0]?.matter) ?? solid;
-
   let injectMultiplier = 1;
   let hadASolid = false;
-
   switch (matter) {
     case solid:
       injectMultiplier = wasMelee ? 1.15 : 1.0;
@@ -222,7 +211,6 @@ function moveEffects(move, target, wasMelee = false){
   }
   return { injectMultiplier, hadASolid };
 }
-
 function makeRNG(seed=123456789){
     let s = seed >>> 0;
     return function rand(){
@@ -233,9 +221,11 @@ function makeRNG(seed=123456789){
     }
 }
 class Entity{
-    constructor(species, x, y, extraSize = 0){
+    constructor(species, x, y, team, extraSize = 0){
         this.x = x;
         this.y = y;
+        this.requestedMove = {x:0, y:0}
+        this.vel = { x: 0, y: 0 };
         //stats
         this.originalStats = null;
         this.size = species.baseSize + extraSize;
@@ -243,24 +233,41 @@ class Entity{
         this.pAtk = null; this.eAtk = null;
         this.def = null; this.speed = null;
         this.castSpd = null;
-        // resists
+        //resists
         this.heatResist = 0; this.coldResist = 0;
         this.chemResist = 0; this.electroResist = 0;
         this.maxContain = 0;
         this.containCold = 0; this.containHeat = 0;
         this.containTox = 0; this.containWater = 0;
         this.containCharge = 0; this.containArcane = 0;
-        //
+        //abilities
+        this.abilities = {ab1: null, ab2: null, ab3: null, ab4: null}
+        //timer
+        this.CD = {melee: 0, ab1: 0, ab2: 0, ab3: 0, ab4: 0}
+        this.CDCurrent = {melee: 0, ab1: 0, ab2: 0, ab3: 0, ab4: 0}
+        //extra
         this.species = species.name;
+        this.team = team;
+        this.hasBot = false;
         this.generateEntity(species)
+        this.initialize();
         entityList.push(this)
+    }
+    initialize(){
+        //for now initialize ability statically
+        this.abilities.ab1 = moves.bite;
+        this.CD.ab1 = moves.bite.baseCD;
+        this.abilities.ab2 = moves.air_slice;
+        this.CD.ab1 = moves.air_slice.baseCD;
+        this.abilities.ab3 = moves.chill;
+        this.CD.ab1 = moves.chill.baseCD;
+        this.abilities.ab4 = moves.zap;
+        this.CD.ab1 = moves.zap.baseCD;
     }
     generateEntity(species) {
         const rng = makeRNG(Math.floor(Math.random()*1e9));
-
         let thresholdIn = species.family.baseIn.variation;
         let thresholdOut = species.family.baseOut.variation;
-
         let originalIn = species.family.baseIn.type;
         let originalOut = species.family.baseOut.type;
         let modus = species.family.modus;
@@ -276,9 +283,6 @@ class Entity{
         const entitySize = this.size;
         const stats = this.inheritBaseStats(rolledInner, rolledOuter, entitySize);
         const finalStats = this.addInnateStats(stats, innateVariation)
-        //for draw
-        draw(this.size, finalStats.HP, finalStats.maxHP, {x: this.x, y: this.y})
-        //
         this.species = species.name
         this.innerComposite = rolledInner;
         this.outerComposite = rolledOuter;
@@ -331,7 +335,6 @@ class Entity{
 
         for (const type of move.types) {
         let dmg = move.baseDmg;
-        console.log(dmg)
         // Defensive mitigation
         if (type.dmgTough)   dmg *= (1 - this.def / (this.def + 10));
         if (type.dmgHard)    dmg *= (1 - this.def / (this.def + 10));
@@ -370,11 +373,8 @@ class Entity{
         totalDamage += dmg;
         }
 
-        // Apply to HP
         this.HP = Math.max(0, this.HP - totalDamage);
-
-        // Debug
-        console.log(`${this.species} took ${totalDamage.toFixed(2)} damage. HP left: ${this.HP}`);
+        // console.log(`${this.species} took ${totalDamage.toFixed(2)} damage. HP left: ${this.HP}`);
     }
     addInnateStats(stats, vari){
         let add = {
@@ -402,52 +402,89 @@ class Entity{
         this.pAtk = stat.pAtk; this.eAtk = stat.eAtk;
         this.def = stat.def; this.res = stat.res;
         this.speed = stat.speed; this.castSpd = stat.castSpd;
-        this.capacity = stat.capacity
+        this.capacity = stat.capacity;
     }
-    aiMove() {
-        const safe = this.size * 2;
-        let closestEntity = null;
-        let closestDistance = Infinity;
-
-        for (let entity of entityList) {
-            if (entity === this) continue;
-            const realvect = { x: entity.x - this.x, y: entity.y - this.y };
-            const dist = Math.hypot(realvect.x, realvect.y);
-
-            if (dist < closestDistance) {
-                closestDistance = dist;
-                closestEntity = entity;
-            }
-        }
-        if (!closestEntity) return;
-
-        const realvect = { x: closestEntity.x - this.x, y: closestEntity.y - this.y };
-        const vect = {
-            x: realvect.x - closestEntity.size / 2 - this.size / 2,
-            y: realvect.y - closestEntity.size / 2 - this.size / 2,
-        };
-        const dist = Math.hypot(vect.x, vect.y);
-        const dir = { x: vect.x / dist, y: vect.y / dist };
-
-        if (dist > safe) {
-            this.x += dir.x * this.speed;
-            this.y += dir.y * this.speed;
-            let rand = Math.random();
-            if (rand < 0.05){
-                generateProjectile(dir, this, moves.air_slice)
-            }
-        } else if (dist < safe && dist > this.size) {
-            this.attack(closestEntity);
-        } else {
-            this.x -= dir.x * this.speed;
-            this.y -= dir.y * this.speed;
+    requestMelee(entity){
+        //in range
+        const dist = Math.hypot(entity.x - this.x, entity.y - this.y)
+        if (dist <= this.size  + entity.size){
+            this.attack(entity)
         }
     }
     attack(entity){
-        //blablabla pretend in range
-        //and also tick count cooldown replaced with (atk / 100)
-        //if cooldowns come in, this gets to choose between abilities etc
-        entity.HP -= this.pAtk / 50;
+        if (this.CDCurrent.melee <= 0){
+            this.CDCurrent.melee = this.CD.melee;
+            entity.receiveAttack(this.abilities.ab1, this)
+        }
+    }
+    requestAbility(aimDir, moveDir, ability){
+        if (ability && this.CDCurrent[ability] <= 0){
+            this.CDCurrent[ability] = this.CD[ability] / this.castSpd;
+            const move = this.abilities[ability];
+            console.log("a")
+            if (move.rangeType === "melee"){
+                //find entity in front of moveDir
+                let target = null;
+                let minDist = Infinity;
+                for (let entity of entityList){
+                    if (entity === this) continue;
+                    const toEntity = {x: entity.x - this.x, y: entity.y - this.y};
+                    const mag = Math.hypot(toEntity.x, toEntity.y) || 1;
+                    const normToEntity = {x: toEntity.x / mag, y: toEntity.y / mag};
+                    const dot = normToEntity.x * moveDir.x + normToEntity.y * moveDir.y;
+                    if (dot > 0.7){ // roughly within 45 degrees
+                        const dist = Math.hypot(toEntity.x, toEntity.y);
+                        if (dist < minDist && dist <= this.size * 0.5 + entity.size * 0.5 + 5){
+                            minDist = dist;
+                            target = entity;
+                        }
+                    }
+                }
+                if (target){
+                    target.receiveAttack(move, this);
+                }
+            } else if (move.rangeType === "projectile"){
+                generateProjectile(aimDir, this, move);
+                console.log("a")
+            } else if (move.rangeType === "hitscan"){
+                //instant hit in aimDir up to rangeEnd
+                let target = null;
+                let minDist = Infinity;
+                for (let entity of entityList){
+                    if (entity === this) continue;
+                    const toEntity = {x: entity.x - this.x, y: entity.y - this.y};
+                    const mag = Math.hypot(toEntity.x, toEntity.y) || 1;
+                    const normToEntity = {x: toEntity.x / mag, y: toEntity.y / mag};
+                    const dot = normToEntity.x * aimDir.x + normToEntity.y * aimDir.y;
+                    if (dot > 0.7){ // roughly within 45 degrees
+                        const dist = Math.hypot(toEntity.x, toEntity.y);
+                        if (dist < minDist && dist <= move.rangeEnd){
+                            minDist = dist;
+                            target = entity;
+                        }
+                    }
+                }
+                if (target){
+                    target.receiveAttack(move, this);
+                }
+            }
+        }
+    }
+    move() {
+        //normalize
+        const mag = Math.hypot(this.requestedMove.x, this.requestedMove.y) || 1;
+        this.vel.x = this.requestedMove.x / mag;
+        this.vel.y = this.requestedMove.y / mag;
+        //move
+        this.x += this.vel.x * this.speed;
+        this.y += this.vel.y * this.speed;
+    }
+    timerTick(){
+        for (let key in this.CDCurrent){
+            if (this.CDCurrent[key] > 0){
+                this.CDCurrent[key] -= 1;
+            }
+        }
     }
     checkAlive(){
         if (this.HP <= 0){
@@ -457,20 +494,231 @@ class Entity{
             this.y = Math.random() * canvas.height;
         }
     }
+    action(){
+        this.move();
+    }
     loop(){
-        this.aiMove()
+        this.action();
         this.checkAlive();
     }
 }
+class Bot{
+    constructor(){
+        this.attachedEntity = null;
+        this.focusedEntity = null;
+        this.observedEntitites = []
+        this.requestedPosition = {x:0, y:0}
+        //fight or flight scores, range from -1 to 1:
+        this.totalFightFlight = 0;
+        this.selfHealth = 0;
+        this.enPressures = []; //angles of enemy positions
+        this.tePressures = []; //angles of teammate positions
+        botList.push(this)
+    }
+    initialize(entity){
+        this.attachedEntity = entity;
+        this.attachedEntity.hasBot = true;
+    }
+    observe(){
+        for (let entity of entityList){
+            if (!this.observedEntitites.includes(entity)){
+                this.observedEntitites.push(entity)
+            }
+        }
+    }
+    weighSelf(){
+        //weigh health, then whichever abilities are dmg and movement
+        this.selfHealth = this.attachedEntity.HP / this.attachedEntity.maxHP;
+        this.totalFightFlight = (this.selfHealth - 0.5) * 2; //scale to -1 to 1
+        //add ability weights later
+    }
+    entitiesInRange(){
+        //any that arent in same team, log their health.
+        //then log their distance and then angle (or vector whichever is better)
+        //used to decide if there are too many enemies or if
+        //the entity can take them.
+        const t = this.attachedEntity.team;
+        let teamBackup = []
+        let enemyPressure = [];
+        for (let entity of this.observedEntitites){
+            if (entity.team !== t){
+                let pressure = {
+                    health: entity.HP / entity.maxHP,
+                    distance: Math.hypot(entity.x - this.attachedEntity.x, entity.y - this.attachedEntity.y),
+                    angle: Math.atan2(entity.y - this.attachedEntity.y, entity.x - this.attachedEntity.x)
+                }
+                enemyPressure.push(pressure)
+            }
+        }
+        for (let entity of this.observedEntitites){
+            if (entity.team === t && entity !== this.attachedEntity){
+                let pressure = {
+                    health: entity.HP / entity.maxHP,
+                    size : entity.size,
+                    distance: Math.hypot(entity.x - this.attachedEntity.x, entity.y - this.attachedEntity.y),
+                    angle: Math.atan2(entity.y - this.attachedEntity.y, entity.x - this.attachedEntity.x)
+                }
+                teamBackup.push(pressure)
+            }
+        }
+        this.enPressures = enemyPressure;
+        this.tePressures = teamBackup;
+    }
+    gatherBestSpots(){
+        const personalSpace = 5;
+        const safeRange = this.attachedEntity.size * 2
+        let potentialPositions = []
+        //might wanna add distance conditions so entities dont clump together
+        if (this.tePressures.length == 0){
+            //if more healthy, go towards enemies
+            for (let enemy of this.enPressures){
+                if (this.selfHealth > 0.5){
+                    //go towards enemy
+                    if (enemy.distance < safeRange + enemy.size/2) continue; //dont get too close
+                    let pos = {
+                        x: this.attachedEntity.x + Math.cos(enemy.angle) * personalSpace,
+                        y: this.attachedEntity.y + Math.sin(enemy.angle) * personalSpace
+                    }
+                    potentialPositions.push(pos)
+                } else {
+                    //go away from enemy
+                    let pos = {
+                        x: this.attachedEntity.x - Math.cos(enemy.angle) * personalSpace,
+                        y: this.attachedEntity.y - Math.sin(enemy.angle) * personalSpace
+                    }
+                    potentialPositions.push(pos)
+                }
+            }            
+        } else {
+            for (let pressure of this.tePressures){
+                for (let enemy of this.enPressures){
+                    let angleDiff = Math.abs(pressure.angle - enemy.angle);
+                    if (angleDiff < Math.PI / 2){
+                        if (pressure.health <= this.selfHealth){
+                            //get in front of teammate
+                            let pos = {
+                                x: this.attachedEntity.x + Math.cos(pressure.angle) * personalSpace,
+                                y: this.attachedEntity.y + Math.sin(pressure.angle) * personalSpace
+                            }
+                            potentialPositions.push(pos)
+                        }
+                    } else {
+                        if (pressure.health >= this.selfHealth){
+                            //get behind teammate
+                            let pos = {
+                                x: this.attachedEntity.x - Math.cos(pressure.angle) * personalSpace,
+                                y: this.attachedEntity.y - Math.sin(pressure.angle) * personalSpace
+                            }
+                            potentialPositions.push(pos)
+                        }
+                    }
+                }
+            }
+        }
+        if (potentialPositions.length == 0){
+            let pos = {
+                x: this.attachedEntity.x + (Math.random()-0.5)*2,
+                y: this.attachedEntity.y + (Math.random()-0.5)*2
+            }
+            potentialPositions.push(pos)
+        }
+        if (potentialPositions.length !== 0){
+            //maybe whichever pressure is better/positive
+            this.requestedPosition = potentialPositions[0];
+        }
+    }
+    decideFocus(){
+        //decide which entity to focus on based on position and health
+        let bestScore = -Infinity;
+        for (let entity of this.observedEntitites){
+            if (entity === this.attachedEntity) continue;
+            let dist = Math.hypot(entity.x - this.attachedEntity.x, entity.y - this.attachedEntity.y);
+            if (dist < 20) continue;
+            let healthScore = (entity.HP / entity.maxHP);
+            let positionScore = 1 / (dist + 1); //closer is better
+            let totalScore = (1 - healthScore) + positionScore; //prefer weaker and closer
+            if (totalScore > bestScore){
+                bestScore = totalScore;
+                this.focusedEntity = entity;
+            }
+        }
+    }
+    chooseBestSpotOrFocus(){
+        //decide whether to go to best spot or move to focus on entity
+        if (this.focusedEntity){
+            this.requestedPosition = {x: this.focusedEntity.x, y: this.focusedEntity.y}
+        } else {
+            this.gatherBestSpots();
+        }
+    }
+    requestMelee(){
+        if (this.focusedEntity){
+            this.attachedEntity.requestMelee(this.focusedEntity)
+        }
+    }
+    rangedAbilityDecide(){
+        //if has a ranged ability, decide to use it on focusedEntity
+        if (this.focusedEntity){
+            let dir = {
+                x: this.focusedEntity.x - this.attachedEntity.x,
+                y: this.focusedEntity.y - this.attachedEntity.y
+            }
+            const mag = Math.hypot(dir.x, dir.y) || 1;
+            dir.x /= mag; dir.y /= mag;
+            this.attachedEntity.requestAbility(dir, null, moves.air_slice)
+        }
+    }
+    urgentMovement(){
+        if (this.selfHealth < 0.3){
+            let dir = {
+                x: this.requestedPosition.x - this.attachedEntity.x,
+                y: this.requestedPosition.y - this.attachedEntity.y
+            }
+            const mag = Math.hypot(dir.x, dir.y) || 1;
+            dir.x /= mag; dir.y /= mag;
+            this.attachedEntity.x += dir.x * this.attachedEntity.speed * 2;
+            this.attachedEntity.y += dir.y * this.attachedEntity.speed * 2;
+        }
+    }
+    requestChildToMove(){
+        let dir = {
+            x: this.requestedPosition.x - this.attachedEntity.x,
+            y: this.requestedPosition.y - this.attachedEntity.y
+        }
+        this.attachedEntity.requestedMove = dir;
+    }
+    loop(){
+        this.observe();
+        this.weighSelf();
+        this.entitiesInRange();
+        this.decideFocus();
+        this.chooseBestSpotOrFocus();
+        this.rangedAbilityDecide();
+        this.urgentMovement();
+        this.requestChildToMove();
+        this.requestMelee();
+    }
+}
 
-let dogEntity = new Entity(species.houseDog, 20, 20, 5);
-let catEntity = new Entity(species.houseCat, 80, 50, 5);
-let bird1 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 5);
-let bird2 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 5);
-let bird3 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 5);
-let bird4 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 5);
-let bird5 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 5);
-let bird6 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 5);
+let dogEntity = new Entity(species.houseDog, 20, 20, 0, 5);
+let catEntity = new Entity(species.houseCat, 80, 50, 1, 5);
+let bird1 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
+let bird2 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
+let bird3 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
+let bird4 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
+let bird5 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
+let mechBird = new Entity(species.mechBird, Math.random()*canvas.width, Math.random()*canvas.height, 3,5);
+
+function addBotToEntity(){
+    for (let entity of entityList){
+        if (!entity.hasBot){
+            let bot = new Bot();
+            entity.bot = bot
+            bot.initialize(entity)
+        }
+    }
+}
+addBotToEntity();
 
 function draw(size, HP, name, pos){
     ctx.fillRect(pos.x - size/2, pos.y - size/2, size, size)
@@ -483,11 +731,15 @@ function draw(size, HP, name, pos){
 function gloop(){
     ctx.clearRect(0,0,canvas.width, canvas.height)
     projectileLoop();
+    for (let bot of botList){
+        bot.loop();
+    }
     for (let entity of entityList){
         entity.loop();
         draw(entity.size, entity.HP, entity.species, {x: entity.x, y: entity.y})
     }
+    console.log(mechBird.bot.focusedEntity.species)
     // requestAnimationFrame(gloop)
 }
-setInterval(gloop, 30)
+setInterval(gloop, 60)
 // gloop();
