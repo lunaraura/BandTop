@@ -1,6 +1,6 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext("2d");
-const globalSpeed = 10;
+const globalSpeed = 20;
 const globalCSpeed = 100;
 const solid = "solid";
 const liquid = "liquid";
@@ -746,7 +746,7 @@ function teamSpawner(team, count, speciesKey, extraSize = 0){
 }
 //spawning entities
 teamSpawner("A", 5, "houseDog", 0);
-let mechBird = entitySpawner("mechBird", canvas.width/2, canvas.height/2, "B", 10);
+let mechBird = entitySpawner("mechBird", canvas.width/2, canvas.height/2, "B", 50);
 teamSpawner("B", 10, "bird", 0);
 
 function addBotToEntity(){
@@ -761,10 +761,13 @@ function addBotToEntity(){
 addBotToEntity();
 
 function draw(size, HP, name, pos){
-    ctx.fillRect(pos.x - size/2, pos.y - size/2, size, size)
+    ctx.beginPath()
+    ctx.moveTo(pos.x, pos.y)
+    ctx.arc(pos.x, pos.y, size/2, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.stroke();
     ctx.fillText(name, pos.x, pos.y - 10)
     ctx.fillText(Math.round(HP) + "HP", pos.x + 10 + size, pos.y + 15);
-    
 }
 
 function gloop(){
@@ -780,5 +783,5 @@ function gloop(){
     console.log(mechBird.bot.focusedEntity.species)
     // requestAnimationFrame(gloop)
 }
-setInterval(gloop, 60)
+setInterval(gloop, 100)
 // gloop();
