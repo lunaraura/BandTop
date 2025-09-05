@@ -646,7 +646,6 @@ class Bot{
                 }
             }
         }
-        //add up all pressures to get a final vector that is normalized
         if (potentialPositions.length > 0){
             let avgX = 0; let avgY = 0;
             for (let pos of potentialPositions){
@@ -666,7 +665,7 @@ class Bot{
             if (entity === this.attachedEntity) continue;
             let dist = Math.hypot(entity.x - this.attachedEntity.x, entity.y - this.attachedEntity.y);
             let healthScore = (entity.HP / entity.maxHP);
-            let positionScore = 1 / (dist + 1); //closer is better
+            let positionScore = 1 / (dist + 1); //closer better
             let totalScore = (1 - healthScore) + positionScore; //prefer weaker and closer
             if (totalScore > bestScore){
                 bestScore = totalScore;
@@ -705,7 +704,7 @@ class Bot{
             }
             const mag = Math.hypot(dir.x, dir.y) || 1;
             dir.x /= mag; dir.y /= mag;
-            this.attachedEntity.requestAbility(null, dir, moves.dash)
+            // this.attachedEntity.requestAbility(null, dir, moves.dash)
         }
     }
     requestChildToMove(){
@@ -725,6 +724,7 @@ class Bot{
         this.urgentMovement();
         this.requestChildToMove();
         this.requestMelee();
+        this.observedEntitites = []
     }
 }
 
@@ -746,7 +746,7 @@ function teamSpawner(team, count, speciesKey, extraSize = 0){
 }
 //spawning entities
 teamSpawner("A", 5, "houseDog", 0);
-let mechBird = entitySpawner("mechBird", canvas.width/2, canvas.height/2, "B", 50);
+// let mechBird = entitySpawner("mechBird", canvas.width/2, canvas.height/2, "B", 0);
 teamSpawner("B", 10, "bird", 0);
 
 function addBotToEntity(){
@@ -780,7 +780,7 @@ function gloop(){
         entity.loop();
         draw(entity.size, entity.HP, entity.species, {x: entity.x, y: entity.y})
     }
-    console.log(mechBird.bot.focusedEntity.species)
+    // console.log(mechBird.bot.focusedEntity.species)
     // requestAnimationFrame(gloop)
 }
 setInterval(gloop, 100)
