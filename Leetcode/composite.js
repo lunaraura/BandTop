@@ -1,7 +1,7 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext("2d");
 const globalSpeed = 10;
-const globalCSpeed = 100; //in ticks probably
+const globalCSpeed = 100;
 const solid = "solid";
 const liquid = "liquid";
 const gas = "gas";
@@ -11,14 +11,6 @@ let botList = []
 let entityList = []
 let projectileList = [];
 let iteration = 0
-//composite dictionary for monster makeup
-//modus dictionary for monster brain: decides pool of composites
-//moveType dictionary for dmg/energy ability makeup
-//move dictionary for ability
-//family for broad group of monsters
-//species for more specific group of monsters
-//
-
 const composites = {
     stone:       {name: "stone", matter: solid,  tough: 0.30, hard: 0.8, energy: 0.0, elastic: 0.0, tempBaseline: 0.5, chemResist: 0.6,
         electroResist: 1.0, density: 0.9, porosity: 0.0,  thermCond: 0.05, electCond: 0.1},
@@ -71,13 +63,14 @@ const moveType = {
 }
 const moves = {
     air_slice: {baseDmg: 10, types: [moveType.slice, moveType.cold], rangeType: "projectile", projSpeed: 20, 
-        falloffStart: 20, rangeEnd: 50, baseCD: 120},
+        falloffStart: 20, rangeEnd: 50, baseCD: 500},
     bite: {baseDmg: 5, types: [moveType.drill], rangeType:"melee", baseCD: 30},
     burn: {baseDmg: 10, types: [moveType.fire, moveType.cold], rangeType: "projectile", projSpeed: 5,
         falloffStart: 5, rangeEnd: 10, baseCD: 50},
     chill: {baseDmg: 10, types: [moveType.wind], rangeType: "area",
         falloffStart: 5, rangeEnd: 20, baseCD: 30},
-    light_blast: {baseDmg: 30, types: [moveType.electric]},
+    dash: {rangeType: "movement", totalDuration: 20, speedChangeType: "ease out",  baseCD: 100},
+    light_blast: {baseDmg: 30, types: [moveType.electric], rangeType: "hitscan", rangeEnd: 30, baseCD:1000},
     zap: {baseDmg: 20, types: [moveType.electric], rangeType: "hitscan",
         falloffStart: 0, rangeEnd: 20, baseCD: 100},
 }
@@ -96,7 +89,7 @@ const species = {
     houseCat: {name: "Cat", family: family.feline, baseSize: 6},
     wolf: {name: "Wolf", family: family.canine, baseSize: 12},
     bird: {name: "Bird", family: family.bird, baseSize: 3},
-    mechBird: {name: "Mecha Bird", family: family.bird, baseSize: 20},
+    mechBird: {name: "Mecha Bird", family: family.mecha, baseSize: 20},
 }
 const familyInnateVariation = {
     canine: {pAtk:{t: 0.5, r: 10}, eAtk:{t: 0, r: 1}, maxHP: {t: 0.5, r: 20},
@@ -113,6 +106,8 @@ const familyInnateVariation = {
         speed: {t: 0, r: 5}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
     elemental: {pAtk:{t: 1, r: 5}, eAtk:{t: 0.5, r: 1}, maxHP: {t: 1, r: 10},
         speed: {t: 0, r: 2}, def: {t: 0.5, r: 1}, castSpd: {t: 0.5, r: 1}},
+    mecha: {pAtk:{t: 0, r: 10}, eAtk:{t: 0, r: 10}, maxHP: {t: 0, r: 40},
+        speed: {t: 0.5, r: 10}, def: {t: 0.5, r: 10}, castSpd: {t: 1, r: 10}},
 }
 function clamp01(v){ return Math.max(0, Math.min(1, v))}
 function soakBuilder(inner, outer, size) {
@@ -154,12 +149,13 @@ function generateProjectile(direction, fromEntity, moveset){
         moveset.projSpeed = 1;
         console.error("move has no proj speed fix")
     }
-        let projectile = {
+    let projectile = {
         from: fromEntity,
+        team: fromEntity.team,
         x: fromEntity.x,
         y: fromEntity.y,
         dir: direction,
-        move: moveset,      // keep full move here
+        move: moveset,
         speed: moveset.projSpeed,
         };
 
@@ -172,16 +168,15 @@ function projectileLoop(){
     p.x += (p.dir.x / mag) * p.speed;
     p.y += (p.dir.y / mag) * p.speed;
 
-    // simple lifetime and hit check
     if (p.x < 0 || p.x > canvas.width || p.y < 0 || p.y > canvas.height){
       projectileList.splice(i,1); continue;
     }
     for (const e of entityList){
       if (e === p.from) continue;
         if (Math.hypot(e.x - p.x, e.y - p.y) <= e.size*0.5){
-        e.receiveAttack(p.move, p.from);  // use the full move, not just dmg
-        projectileList.splice(i,1);
-        break;
+            e.receiveAttack(p.move, p.from);
+            projectileList.splice(i,1);
+            break;
         }
 
     }
@@ -189,8 +184,6 @@ function projectileLoop(){
   }
 }
 function moveEffects(move, target, wasMelee = false){
-//   const O = target.outerComposite;
-//   const I = target.innerComposite;
   const matter = (move.types?.[0]?.matter) ?? solid;
   let injectMultiplier = 1;
   let hadASolid = false;
@@ -242,6 +235,7 @@ class Entity{
         this.containCharge = 0; this.containArcane = 0;
         //abilities
         this.abilities = {ab1: null, ab2: null, ab3: null, ab4: null}
+        this.buffs = []
         //timer
         this.CD = {melee: 0, ab1: 0, ab2: 0, ab3: 0, ab4: 0}
         this.CDCurrent = {melee: 0, ab1: 0, ab2: 0, ab3: 0, ab4: 0}
@@ -254,15 +248,14 @@ class Entity{
         entityList.push(this)
     }
     initialize(){
-        //for now initialize ability statically
         this.abilities.ab1 = moves.bite;
         this.CD.ab1 = moves.bite.baseCD;
         this.abilities.ab2 = moves.air_slice;
-        this.CD.ab1 = moves.air_slice.baseCD;
+        this.CD.ab2 = moves.air_slice.baseCD;
         this.abilities.ab3 = moves.chill;
-        this.CD.ab1 = moves.chill.baseCD;
+        this.CD.ab3 = moves.chill.baseCD;
         this.abilities.ab4 = moves.zap;
-        this.CD.ab1 = moves.zap.baseCD;
+        this.CD.ab4 = moves.zap.baseCD;
     }
     generateEntity(species) {
         const rng = makeRNG(Math.floor(Math.random()*1e9));
@@ -272,8 +265,8 @@ class Entity{
         let originalOut = species.family.baseOut.type;
         let modus = species.family.modus;
 
-        const rolledInner = this.rollCompositeType(originalIn,  thresholdIn, rng, modus);
-        const rolledOuter = this.rollCompositeType(originalOut, thresholdOut, rng, composites);
+        const rolledInner = this.rollCompositeType(originalIn,  thresholdIn, rng(), modus);
+        const rolledOuter = this.rollCompositeType(originalOut, thresholdOut, rng(), composites);
         const familyName = Object.keys(family).find(key => family[key] === species.family);
         const innateVariation = familyInnateVariation[familyName];
         if (!innateVariation) {
@@ -323,7 +316,7 @@ class Entity{
             eAtk:  +Math.max(0, eAtk).toFixed(3),
             def:   +Math.max(0, def).toFixed(3),
             res,
-            capacity, // (consider renaming to reservoirs/caps)
+            capacity,
             speed: +Math.max(0.1, speed).toFixed(3),
             castSpd: +Math.max(0.1, castSpd).toFixed(3),
         };
@@ -331,16 +324,14 @@ class Entity{
     }
     receiveAttack(move, attacker = null) {
         let totalDamage = 0;
-        const cap = this.originalStats.capacity; // soakBuilder results
+        const cap = this.capacity; // soakBuilder results
 
         for (const type of move.types) {
         let dmg = move.baseDmg;
-        // Defensive mitigation
         if (type.dmgTough)   dmg *= (1 - this.def / (this.def + 10));
         if (type.dmgHard)    dmg *= (1 - this.def / (this.def + 10));
         if (type.dmgElastic) dmg *= (1 - this.res / (this.res + 10));
 
-        // Elemental containers
         if (type.dmgHeat) {
             const leak = cap.leaks.hot;
             const left = Math.max(0, dmg - leak);
@@ -417,11 +408,23 @@ class Entity{
             entity.receiveAttack(this.abilities.ab1, this)
         }
     }
-    requestAbility(aimDir, moveDir, ability){
-        if (ability && this.CDCurrent[ability] <= 0){
+    requestAbility(aimDir, moveDir, abilityArg){
+        let ability = null;
+        if (abilityArg == this.abilities.ab1){ ability = "ab1"}
+        if (abilityArg == this.abilities.ab2){ ability = "ab2"}
+        if (abilityArg == this.abilities.ab3){ ability = "ab3"}
+        if (abilityArg == this.abilities.ab4){ ability = "ab4"}
+        if (abilityArg && this.CDCurrent[ability] <= 0){
             this.CDCurrent[ability] = this.CD[ability] / this.castSpd;
             const move = this.abilities[ability];
-            console.log("a")
+            if (move.rangeType === "movement"){
+                //add buff
+                let movementAbility = abilityArg;
+                //turn into buff
+                let buff = {...movementAbility, duration: movementAbility.totalDuration, totalDuration: movementAbility.totalDuration}
+                this.buffs.push({buff})
+                return;
+            }
             if (move.rangeType === "melee"){
                 //find entity in front of moveDir
                 let target = null;
@@ -445,7 +448,6 @@ class Entity{
                 }
             } else if (move.rangeType === "projectile"){
                 generateProjectile(aimDir, this, move);
-                console.log("a")
             } else if (move.rangeType === "hitscan"){
                 //instant hit in aimDir up to rangeEnd
                 let target = null;
@@ -478,11 +480,37 @@ class Entity{
         //move
         this.x += this.vel.x * this.speed;
         this.y += this.vel.y * this.speed;
+        if (this.x < 0) this.x = canvas.width/2; 
+        if (this.x > canvas.width)  this.x = canvas.width/2;
+        if (this.y < 0) this.y= canvas.height/2
+        if (this.y > canvas.height)  this.y = canvas.height/2
     }
     timerTick(){
         for (let key in this.CDCurrent){
             if (this.CDCurrent[key] > 0){
                 this.CDCurrent[key] -= 1;
+            }
+        }
+        for (let buff in this.buffs){
+            this.buffs[buff].duration -= 1;
+            if (this.buffs[buff].duration <= 0){
+                this.buffs.splice(buff, 1);
+            }
+        }
+    }
+    buffUpdate(){
+        //apply buffs effects
+        //movement: speedChangeTypes: ease in, ease out, instant
+        //changeMagnify: 0 to 1, 
+        for (let buff of this.buffs){
+            if (buff.type === "speed"){
+                if (buff.speedChangeType === "instant"){
+                    this.speed *= buff.changeMagnify;
+                } else if (buff.speedChangeType === "ease in"){
+                    this.speed *= 1 + (buff.changeMagnify - 1) * (1 - buff.duration / buff.totalDuration);
+                } else if (buff.speedChangeType === "ease out"){
+                    this.speed *= 1 + (buff.changeMagnify - 1) * (buff.duration / buff.totalDuration);
+                }
             }
         }
     }
@@ -500,6 +528,7 @@ class Entity{
     loop(){
         this.action();
         this.checkAlive();
+        this.timerTick();
     }
 }
 class Bot{
@@ -565,16 +594,18 @@ class Bot{
         this.tePressures = teamBackup;
     }
     gatherBestSpots(){
-        const personalSpace = 5;
+        const personalSpace = this.attachedEntity.size;
         const safeRange = this.attachedEntity.size * 2
         let potentialPositions = []
         //might wanna add distance conditions so entities dont clump together
-        if (this.tePressures.length == 0){
+        if (this.tePressures.length === 0){
             //if more healthy, go towards enemies
             for (let enemy of this.enPressures){
                 if (this.selfHealth > 0.5){
                     //go towards enemy
-                    if (enemy.distance < safeRange + enemy.size/2) continue; //dont get too close
+                    if (enemy.distance < safeRange + enemy.size/2) {
+                        enemy.angle *= -1;
+                    }; //dont get too close
                     let pos = {
                         x: this.attachedEntity.x + Math.cos(enemy.angle) * personalSpace,
                         y: this.attachedEntity.y + Math.sin(enemy.angle) * personalSpace
@@ -615,16 +646,17 @@ class Bot{
                 }
             }
         }
-        if (potentialPositions.length == 0){
-            let pos = {
-                x: this.attachedEntity.x + (Math.random()-0.5)*2,
-                y: this.attachedEntity.y + (Math.random()-0.5)*2
+        //add up all pressures to get a final vector that is normalized
+        if (potentialPositions.length > 0){
+            let avgX = 0; let avgY = 0;
+            for (let pos of potentialPositions){
+                avgX += pos.x; avgY += pos.y;
             }
-            potentialPositions.push(pos)
-        }
-        if (potentialPositions.length !== 0){
-            //maybe whichever pressure is better/positive
-            this.requestedPosition = potentialPositions[0];
+            avgX /= potentialPositions.length;
+            avgY /= potentialPositions.length;
+            this.requestedPosition = {x: avgX, y: avgY}
+        } else {
+            this.requestedPosition = {x: this.attachedEntity.x, y: this.attachedEntity.y}
         }
     }
     decideFocus(){
@@ -633,7 +665,6 @@ class Bot{
         for (let entity of this.observedEntitites){
             if (entity === this.attachedEntity) continue;
             let dist = Math.hypot(entity.x - this.attachedEntity.x, entity.y - this.attachedEntity.y);
-            if (dist < 20) continue;
             let healthScore = (entity.HP / entity.maxHP);
             let positionScore = 1 / (dist + 1); //closer is better
             let totalScore = (1 - healthScore) + positionScore; //prefer weaker and closer
@@ -644,8 +675,7 @@ class Bot{
         }
     }
     chooseBestSpotOrFocus(){
-        //decide whether to go to best spot or move to focus on entity
-        if (this.focusedEntity){
+        if (this.focusedEntity.health == 0){
             this.requestedPosition = {x: this.focusedEntity.x, y: this.focusedEntity.y}
         } else {
             this.gatherBestSpots();
@@ -657,7 +687,6 @@ class Bot{
         }
     }
     rangedAbilityDecide(){
-        //if has a ranged ability, decide to use it on focusedEntity
         if (this.focusedEntity){
             let dir = {
                 x: this.focusedEntity.x - this.attachedEntity.x,
@@ -676,8 +705,7 @@ class Bot{
             }
             const mag = Math.hypot(dir.x, dir.y) || 1;
             dir.x /= mag; dir.y /= mag;
-            this.attachedEntity.x += dir.x * this.attachedEntity.speed * 2;
-            this.attachedEntity.y += dir.y * this.attachedEntity.speed * 2;
+            this.attachedEntity.requestAbility(null, dir, moves.dash)
         }
     }
     requestChildToMove(){
@@ -700,14 +728,26 @@ class Bot{
     }
 }
 
-let dogEntity = new Entity(species.houseDog, 20, 20, 0, 5);
-let catEntity = new Entity(species.houseCat, 80, 50, 1, 5);
-let bird1 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
-let bird2 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
-let bird3 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
-let bird4 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
-let bird5 = new Entity(species.bird, Math.random()*canvas.width, Math.random()*canvas.height, 2, 5);
-let mechBird = new Entity(species.mechBird, Math.random()*canvas.width, Math.random()*canvas.height, 3,5);
+function entitySpawner(speciesKey, x, y, team, extraSize = 0){
+    const spec = species[speciesKey];
+    if (!spec){
+        console.error("species not found: " + speciesKey)
+        return;
+    }
+    let entity = new Entity(spec, x, y, team, extraSize);
+    return entity;
+}
+function teamSpawner(team, count, speciesKey, extraSize = 0){
+    for (let i = 0; i < count; i++){
+        let x = Math.random() * canvas.width;
+        let y = Math.random() * canvas.height;
+        entitySpawner(speciesKey, x, y, team, extraSize)
+    }
+}
+//spawning entities
+teamSpawner("A", 5, "houseDog", 0);
+let mechBird = entitySpawner("mechBird", canvas.width/2, canvas.height/2, "B", 10);
+teamSpawner("B", 10, "bird", 0);
 
 function addBotToEntity(){
     for (let entity of entityList){
@@ -722,10 +762,9 @@ addBotToEntity();
 
 function draw(size, HP, name, pos){
     ctx.fillRect(pos.x - size/2, pos.y - size/2, size, size)
-    // ctx.fillText(Math.round(maxHP) + "maxHP", pos.x + 5 + size, pos.y + 5);
     ctx.fillText(name, pos.x, pos.y - 10)
     ctx.fillText(Math.round(HP) + "HP", pos.x + 10 + size, pos.y + 15);
-
+    
 }
 
 function gloop(){
