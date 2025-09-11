@@ -59,6 +59,7 @@ class Rigid {
         this.rotate = v(0,0,0);
         this.pivot = pivotOffset
         this.anchoring = []
+        this.anchoredBy = 0;
         this.impendingAnchoredChanges = [{
             translate: v(0,0,0),
             anchoredPivot: v(0,0,0),
@@ -117,7 +118,13 @@ class Rigid {
                 y: this.pivot.y,
                 z: this.pivot.z,
             }
-            block.anchoring.push({block: this, offset: restrainedPos, angleOffset: restrainedAngle, anchoredPivot: anchoredPivot})
+            block.anchoredBy = this;
+            block.offset = restrainedPos;
+            block.angleOffset = restrainedAngle;
+            this.anchoredPivot = anchoredPivot
+            block.anchoredTo = this;
+            block.impendingAnchoredChanges = [];
+            block.updateAnchors();
         }
     }
     updateAnchors(){
@@ -137,12 +144,28 @@ class Rigid {
                 y: this.pivot.y,
                 z: this.pivot.z,
             }
-            anchor.block.impendingAnchoredChanges.push({
-                translate: uploadTranslate,
+            let newScale = {
+                x: this.scale.x / anchor.scale.x,
+                y: this.scale.y / anchor.scale.y,
+                z: this.scale.z / anchor.scale.z,
+            }
+            let scaledTranslate = {
+                x: uploadTranslate.x * newScale.x,
+                y: uploadTranslate.y * newScale.y,
+                z: uploadTranslate.z * newScale.z,
+            }
+            let scaledPivot = {
+                x: uploadPivot.x * newScale.x,
+                y: uploadPivot.y * newScale.y,
+                z: uploadPivot.z * newScale.z,
+            }
+            anchor.impendingAnchoredChanges.push({
+                translate: scaledTranslate,
+                anchoredPivot: scaledPivot,
                 rotate: uploadRotate,
-                anchoredPivot: uploadPivot,
-                scale: anchor.block.scale,
+                scale: newScale,
             })
+            anchor.updateFromAnchor();
         }
     }
     updateStats(pos, rot, scale){
@@ -151,6 +174,17 @@ class Rigid {
         this.scale = scale;
         this.updateMatrix();
         this.updateAnchors();
+    }
+    updateFromAnchor(){
+        if (this.impendingAnchoredChanges.length > 0){
+            let change = this.impendingAnchoredChanges.shift();
+            this.translate = change.translate;
+            this.rotate = change.rotate;
+            this.pivot = change.anchoredPivot;
+            this.scale = change.scale;
+            this.updateMatrix();
+            this.updateAnchors();
+        }
     }
 }
 
@@ -165,8 +199,6 @@ function easyBlock(pos, offset, scale){ //center is offset. (1-offset
         y: pos.y + offset.y,
         z: pos.z + offset.z,
     }
-    //pivot
-    //real block:
     const preset = [
         {x:scale.x, y:scale.y, z:scale.z},//0
         {x:scale.x, y:-scale.y, z:scale.z},//1
@@ -218,7 +250,7 @@ function easyBlock(pos, offset, scale){ //center is offset. (1-offset
     block.vertices = vertices;
     block.faces = faces;
     block.normals = normals;
-    blockList.push(block);
+    blockList.push(block)
     return block
 }
 //offset = scale to rotate on +++ edge. keep 0 to pivot at center
@@ -232,8 +264,7 @@ const partsLibrary = {
     shortTail: easyBlock(v(0,0,0),v(0,0.2,0),v(0.1,0.2,0.1)),//pivots at top of y
 }
 let block = easyBlock(v(0,0,0),v(0,0,0),v(1,0.8,1))
-console.log(easyBlock(v(0,0,0),v(0,0,0),v(1,0.8,1)))
-const entityModelLibrary = { //all scale as if it were 1 block size
+const entityModelLibrary = {
     simpleQuadruped: {
         style: 'quadruped',
         torso: partsLibrary.quadrupedTorso,
@@ -279,8 +310,7 @@ function stitchPresets(model){
         head.translate = v(torsoCenter.x, torsoCenter.y + torso.scale.y/2 + head.scale.y/2, torsoCenter.z - torso.scale.z/2 - head.scale.z/2)
         head.pivot = v(0,0,head.scale.z/2)
         torso.initializeAnchors(...legs, head);
-    }
-    
+    }    
 }
 class Entity {
     constructor(species, pos){
@@ -304,15 +334,14 @@ class Entity {
         let torso = this.modelParts.torso;
         torso.updateStats(v(this.pos.x + this.modelParts.torso.translate.x, this.pos.y + this.modelParts.torso.translate.y, this.pos.z + this.modelParts.torso.translate.z), v(0,0,0), v(1,1,1))
         this.model['torso'] = torso;
-        console.log(torso)
-        console.log(this.modelParts.legs)
+        console.log(torso.translate)
+        console.log(this.modelParts.head.translate)
     }
-
 }
 
 
-let entity1 = new Entity(null, v(200,200,0))
-console.log(blockList)
+let entity1 = new Entity(null, v(100,100,0))
+
 function draw(){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.strokeStyle = "black"
