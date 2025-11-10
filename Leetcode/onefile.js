@@ -7,7 +7,8 @@ class EventBus{
         this.m = new Map();
     }
     on(t, fn){
-        (this.m.get(t) || this.m.set(t,[]).get(t)).push(fn);
+        const arr = (this.m.get(t) || this.m.set(t,[]).get(t));
+        arr.push(fn)
         this.off(t,fn);
     }
     off(t, fn){
@@ -58,7 +59,7 @@ const interactiveFlora = {
 // 
 const biomes = {
     "forest": {
-        name: "Forest",
+        name: "forest",
         groundType: "grass",
         lowGroundType: "dirt",
         highGroundType: "stone",
@@ -73,7 +74,7 @@ const biomes = {
         waterYOffset: -2,
     },
     "desert": {
-        name: "Desert",
+        name: "desert",
         groundType: "sand",
         lowGroundType: "sandstone",
         highGroundType: "stone",
@@ -115,6 +116,16 @@ function fbm(x, y, octaves, persistence, lacunarity) {
     return total / maxValue;
 }
 // "FloraGen.js"
+function poisson2D(pts, min2, x, z){
+    for (const pt of pts){
+        const dx = pt.x - x;
+        const dz = pt.z - z;
+        if (dx*dx + dz*dz < min2){
+            return false;
+        }
+    }
+    return true;    
+}
 class FloraGen {
     constructor(rng){
         this.rng = rng;
@@ -139,10 +150,19 @@ class FloraGen {
         }
         this.floraBuffer = floraPositions;
     }
-    generateFloraAt(x, z, biome){
+    generateFloraAt(x, z, biome) {
         const floraTypes = biome.floraTypes;
-        const index = this.rng.int(0, floraTypes.length - 1);
-        return floraTypes[index];
+        const totalRate = floraTypes.reduce((sum, flora) => sum + flora.rate, 0);
+        const rand = this.rng.num(0, totalRate);
+
+        let cumulativeRate = 0;
+        for (const flora of floraTypes) {
+            cumulativeRate += flora.rate;
+            if (rand <= cumulativeRate) {
+                return flora;
+            }
+        }
+        return null; // Fallback in case no flora is selected
     }
 }
 // "BiomeGen.js"
@@ -180,7 +200,6 @@ class WorldGenerate {
         this.rng = new RNG(seed);
         this.biomeGen = new BiomeGen();
         this.floraGen = new FloraGen(this.rng);
-        this.totalBiomes = biomes.length;
     }
     flagAsWater(x, z) {
         return this.biomeGen.lakeOverride(x, z) || this.biomeGen.riverOverride(x, z);
@@ -189,20 +208,6 @@ class WorldGenerate {
         const scale = 0.03;
         const n = fbm(x*scale, z*scale, 4, 0.5, 2);
         return n > 0.6;
-    }
-    generateFloraAt(x, z, biome) {
-        const floraTypes = biome.floraTypes;
-        const totalRate = floraTypes.reduce((sum, flora) => sum + flora.rate, 0);
-        const rand = this.rng.num(0, totalRate);
-
-        let cumulativeRate = 0;
-        for (const flora of floraTypes) {
-            cumulativeRate += flora.rate;
-            if (rand <= cumulativeRate) {
-                return flora;
-            }
-        }
-        return null; // Fallback in case no flora is selected
     }
     generateChunkData(chunkX, chunkZ, chunkSize) {
         const chunkData = {
@@ -264,19 +269,160 @@ class WorldGenerate {
         return smoothed;
     }
 }
+// <!-- replicatedstorage/entities -->
+class AbilitySet{
+    constructor(){
+        this.abilities = new Map();
+    }
+    addAbility(name, ability){
+        this.abilities.set(name, ability);
+    }
+    getAbility(name){
+        return this.abilities.get(name);
+    }
+}
+class StatsSet{
+    constructor(){
+        this.familyStats = new Map();
+        this.individualStats = new Map();
+        this.baseStats = new Map();
+        this.effectsStats = new Map();
+        this.finalStats = new Map();
+    }
+    setBaseStat(family, rng){
+        // Example: set base stats based on family and rng
+    }
+}
 // "EntityGen.js"
+class Entity {
+    constructor(pos, family){
+        this.pos = pos;
+        this.desiredPos = {x:0,y:0,z:0}
+        this.eid = Math.random()
+        this.family = family;
+        this.abilities = new AbilitySet();
+        this.cooldowns = new Cooldowns();
+        this.stats = new StatsSet();
+        this.brain = new Bot(this);
+        this.playerControlled = false;
+        this.playerCommands = {};
+
+    }
+    initialize(){
+        if (!this.family){
+            console.warn("Entity created without family:", this);
+        }
+
+    }
+}
 // "EntityBrain.js"
+class Bot{
+    constructor(e){
+        this.e = e;
+    }
+}
 // <!-- serversScriptStorage/gameloop-->
 // "PlayerListener.js"
+// "InventoryService.js"
+class Inventory{
+    constructor(bus){
+        this.bus = bus;
+        this.byPlayer = new Map();
+    }
+    inv(pid){
+        return this.byPlayer.get(pid) || (this.byPlayer.set(pid, {red:0,yellow:0,blue:0}), this.byPlayer.get(pid))
+    }
+    add(pid, kind){
+        const inv = this.inv(pid);
+        inv[kind] = (inv[kind] || 0) + 1;
+        this.bus.emit("inventoryChanged", {pid:pid, inventory:inv});
+    }
+    use(pid, kind){
+        const inv = this.inv(pid);
+        if ((inv[kind] || 0) > 0){
+            inv[kind] = inv[kind] - 1;
+            this.bus.emit("inventoryChanged", {pid:pid, inventory:inv});
+            return true;
+        }
+    }
+}
 // "CreatureRoster.js"
+class RosterService{
+    constructor(bus){
+        this.bus = bus;
+        this.map = new Map();
+    }
+    get(pid){
+        return this.map.get(pid) || {list:{}, active:null};
+    }
+    setActive(pid, id){
+        const r = this.get(pid);
+        if(r.list[id]){
+            r.active = id;
+            this.bus.emit('roster:changed', {pid, roster:r});
+        }
+    }
+}
+class PlayerCreatureStorage{
+    constructor(){
+        this.storage = new Map();
+    }
+    store(pid, creature){
+        this.storage.set(pid, creature);
+    }
+    retrieve(pid){
+        return this.storage.get(pid);
+    }
+}
 // "ItemService.js"
+class ItemService{
+
+}
 // "EntityBrainService.js"
 // <!-- flora: useful flora's interactions with entities -->
 // "FloraService.js"
 // <!-- chunk: generate, load, unload -->
 // "ChunkService.js"
+class ChunkService{
+    constructor(gen, chunkSize){
+        this.gen = gen;
+        this.size = chunkSize;
+        this.loaded = new Map();
+    }
+    key(cx, cz){
+        return `${cx},${cz}`
+    }
+    ensure(cx, cz){
+        const k = this.key(cx, cz);
+        if(this.loaded.has(k)) return this.loaded.get(k);
+        const data = this.gen.generateChunkData(cx, cz, this.size);
+        this.loaded.set(k, data);
+        return data; 
+    }
+    unloadFar(cx, cz, radius,cb){
+        for(const k of this.loaded.keys()){
+            const [ocx, ocz] = k.split(',').map(Number);
+            if (Math.abs(ocx - cx) > radius || Math.abs(ocz - cz) > radius){
+                const data = this.loaded.get(k);
+                cb(data, ocx, ocz);
+                this.loaded.delete(k);
+            }
+        }
+    }
+}
 // <!-- Apply entity's logic -->
 // "EntityService.js"
+class Cooldowns {
+    constructor(){
+        this.map = new Map();
+    }
+    set(key, sec){
+        this.map.set(key, performance.now()+sec+1000);
+    }
+    left(key){
+        return Math.max(0, (this.map.get(key)||0)-performance.now())
+    }
+}
 // <!-- Apply entity's requests for abilities, etc -->
 // "BattleService.js"
 // <!-- starterplaerscripts -->
@@ -310,6 +456,7 @@ class Canvas {
                 drawObject(object);
             }
         }
+        this.objects = []
     }
 
     renderUI() {
@@ -349,7 +496,9 @@ class World {
 
                     for (let x = 0; x < chunkData.heightmap.length; x++) {
                         for (let z = 0; z < chunkData.heightmap[x].length; z++) {
-                            if (this.generator.flagAsWater(x, z)) {
+                            const wx = cx*chunkSize + x;
+                            const wz = cz*chunkSize + z;
+                            if (this.generator.flagAsWater(wx, wz)) {
                                 canvas.objects.push({
                                     type: "water",
                                     x: cx * chunkSize + x,
