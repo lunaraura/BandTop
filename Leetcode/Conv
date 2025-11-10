@@ -1,0 +1,131 @@
+Good skeleton. Fix these concrete issues before adding more.
+
+Must-fix bugs
+	1.	EventBus.on unsubscribes itself
+
+on(t, fn){
+  const arr = this.m.get(t) || (this.m.set(t,[]), this.m.get(t));
+  arr.push(fn);
+  return () => { const i = arr.indexOf(fn); if (i>=0) arr.splice(i,1); };
+}
+
+	2.	Cooldowns milliseconds math
+
+set(key, secs){ this.map.set(key, performance.now() + secs*1000); }
+
+	3.	Seedless noise/fbm
+Pass the world seed so terrain is reproducible.
+
+function noise(x,y,seed=0){
+  const s = Math.sin(x*12.9898 + y*78.233 + seed*0.001234)*43758.5453;
+  return s - Math.floor(s);
+}
+function fbm(x,y,oct,pers,lac,seed=0){
+  let total=0, freq=1, amp=1, max=0;
+  for(let i=0;i<oct;i++){
+    total += noise(x*freq,y*freq,seed+i*101)*amp;
+    max += amp; amp*=pers; freq*=lac;
+  }
+  return total/max;
+}
+
+Wire it through:
+	•	Store this.seed in WorldGenerate.
+	•	Call fbm(..., this.seed) from WorldGenerate and BiomeGen.
+
+	4.	Water check uses world coords everywhere
+You fixed it in World.generateAroundPlayer for water tiles. Keep that rule anywhere you sample.
+	5.	Canvas accumulation / unload
+Don’t rebuild objects every frame. Track per-chunk.
+
+class Canvas {
+  constructor(biomeGen){ this.biomeGen=biomeGen; this.byChunk=new Map(); }
+  addChunk(key, objs){ this.byChunk.set(key, objs); }
+  removeChunk(key){ this.byChunk.delete(key); }
+  renderWorld(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    for (const objs of this.byChunk.values()){
+      for (const o of objs){
+        if (o.type==="water"){
+          const b=this.biomeGen.biomeMix(o.x,o.z);
+          drawWater(o.x,o.z,b.waterYOffset||0);
+        } else drawObject(o);
+      }
+    }
+  }
+}
+
+Populate when creating/unloading chunks.
+	6.	Biome overlay label
+You compare "Forest" but your name is "forest". Use the key or normalize case.
+	7.	Inventory.use should return boolean
+
+use(pid,kind){
+  const i=this.inv(pid);
+  if((i[kind]||0)<=0) return false;
+  i[kind]--; this.bus.emit("inventoryChanged",{pid,inventory:i}); return true;
+}
+
+	8.	RosterService.get doesn’t initialize
+
+get(pid){
+  if(!this.map.has(pid)) this.map.set(pid,{list:{},active:null});
+  return this.map.get(pid);
+}
+
+	9.	Unused helpers
+poisson2D, smoothGrid are unused. Either hook them up (spacing trees) or delete to avoid confusion.
+
+Small structural nits
+	•	Move ChunkService into World and call chunkSvc.ensure() + chunkSvc.unloadFar(). Cleaner and matches your Roblox server.
+	•	Put “dictionary” modules as plain objects. Treat “services” as classes that accept EventBus.
+	•	Keep AbilitySet and StatsSet minimal for now; add methods only when used.
+
+Minimal patch examples
+
+World + Canvas integration
+
+class World {
+  constructor(seed, chunkSize=16){
+    this.generator = new WorldGenerate(seed);
+    this.chunks = new Map();
+    this.chunkSize = chunkSize;
+  }
+  ensureChunk(cx,cz,canvas){
+    const key = `${cx},${cz}`;
+    if (this.chunks.has(key)) return;
+    const data = this.generator.generateChunkData(cx,cz,this.chunkSize);
+    this.chunks.set(key,data);
+
+    const objs=[];
+    for (const f of data.floraPositions){
+      objs.push({type:"flora", x:f.x, z:f.z, biome:f.biome, flora:f.flora});
+    }
+    for (let x=0;x<data.heightmap.length;x++){
+      for (let z=0; z<data.heightmap[x].length; z++){
+        const wx=cx*this.chunkSize+x, wz=cz*this.chunkSize+z;
+        if (this.generator.flagAsWater(wx,wz)) objs.push({type:"water", x:wx, z:wz});
+      }
+    }
+    canvas.addChunk(key, objs);
+  }
+  updateAround(px,pz,radius,canvas){
+    const cx = Math.floor(px/this.chunkSize), cz = Math.floor(pz/this.chunkSize);
+    for(let dx=-radius; dx<=radius; dx++)
+      for(let dz=-radius; dz<=radius; dz++)
+        this.ensureChunk(cx+dx, cz+dz, canvas);
+
+    for (const key of [...this.chunks.keys()]){
+      const [x,z]=key.split(',').map(Number);
+      if (Math.abs(x-cx)>radius || Math.abs(z-cz)>radius){
+        this.chunks.delete(key);
+        canvas.removeChunk(key);
+      }
+    }
+  }
+}
+
+Use seeded fbm
+Replace all fbm(...) calls with fbm(..., this.seed) inside WorldGenerate, and fbm(..., seed) in BiomeGen after you pass the seed into its constructor.
+
+Apply these and the skeleton will behave predictably, stream cleanly, and mirror your Roblox architecture.
