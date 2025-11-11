@@ -1,294 +1,743 @@
-const solid, liquid, gas, plasma = 1, 2, 3, 4
+const Abilities = {};
 
-const compososites = {
-	organicMammal : { name:"Organic Mammal", matter:solid, physResist:0.10, energyResist:0.05, power:1.00, speed:1.00, density:0.80 },
-	metal         : { name:"Metal",          matter:solid, physResist:0.25, energyResist:0.00, power:0.95, speed:0.90, density:1.10 },
-	slime         : { name:"Slime",          matter:solid, physResist:0.05, energyResist:0.10, power:0.95, speed:1.05, density:0.70 },
-}
-//ReplicatedStorage/Modules/Data/Families.lua
-const families ={
-	felidae : {
-		base : { hp:34, pAtk:8, eAtk:4, def:5, spd:7, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.0, pAtk:1.2, eAtk:0.8, def:0.9, spd:1.3, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 5,
-	},
-	canidae : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
-	},
-	ursidae : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
-	},
-	urodela : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
-	},
-	anura : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
-	},
-	arachnid : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
-	},
-	pterygota : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
-	},
-	squamata : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
-	},
-	testudine : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
-	},
-	columbiformes : {
-		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
-		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
-		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
-		comp : { inner:"organicMammal", outer:"organicMammal" },
-		size : 10,
+function toastAt(part, text, color) {
+    if (part) {
+        AbilityToast.FireAllClients({ part, text, color });
     }
 }
-	// Converted and corrected JavaScript version of the original mixed Lua/JS file.
 
-	const [SOLID, LIQUID, GAS, PLASMA] = [1, 2, 3, 4];
+function clamp(v, a, b) {
+    return Math.max(a, Math.min(b, v));
+}
 
-	const Composites = {
-		organicMammal: { name: "Organic Mammal", matter: SOLID, physResist: 0.10, energyResist: 0.05, power: 1.00, speed: 1.00, density: 0.80 },
-		metal: { name: "Metal", matter: SOLID, physResist: 0.25, energyResist: 0.00, power: 0.95, speed: 0.90, density: 1.10 },
-		slime: { name: "Slime", matter: SOLID, physResist: 0.05, energyResist: 0.10, power: 0.95, speed: 1.05, density: 0.70 },
-	};
+function closestEnemy(ofPet, radius = 40, pool) {
+    let best = null;
+    let bestD = radius;
+    const op = ofPet.HRP.Position;
 
-	const Families = {
-		felidae: {
-			base: { hp: 34, pAtk: 8, eAtk: 4, def: 5, spd: 7, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.0, pAtk: 1.2, eAtk: 0.8, def: 0.9, spd: 1.3, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 5,
-		},
-		canidae: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		ursidae: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		urodela: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		anura: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		arachnid: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		pterygota: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		squamata: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		testudine: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		columbiformes: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-		accipitriformes: {
-			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
-			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
-			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
-			comp: { inner: "organicMammal", outer: "organicMammal" },
-			size: 10,
-		},
-	};
+    const candidates = pool || (_G.AllCreatures || []);
+    for (const other of candidates) {
+        if (other !== ofPet && other.State !== "Dead" && other.Team !== ofPet.Team) {
+            const d = (other.HRP.Position.sub(op)).Magnitude;
+            if (d < bestD) {
+                best = other;
+                bestD = d;
+            }
+        }
+    }
+    return best;
+}
 
-	// Move data
-	const MoveCategory = { PHY: "physical", ENR: "energy" };
+function approachAndDo(pet, tgt, range = 6, maxTime = 3.0, fn) {
+    const my = (pet._actionId || 0) + 1;
+    pet._actionId = my;
+    pet.State = "Manual";
 
-	const MoveTypes = {
-		blunt: { cat: MoveCategory.PHY, flatBypass: { hard: 0.2 }, resistedBy: { elastic: 0.2 } },
-		drill: { cat: MoveCategory.PHY, flatBypass: { tough: 0.2, hard: 0.2 }, resistedBy: { porosity: 0.2 } },
-		pierce: { cat: MoveCategory.PHY, flatBypass: { porosity: 0.3 }, resistedBy: { hard: 0.3 } },
-		slice: { cat: MoveCategory.PHY, flatBypass: { elastic: 0.3 }, resistedBy: { tough: 0.3 } },
-		smash: { cat: MoveCategory.PHY, flatBypass: { hard: 0.3 }, resistedBy: { tough: 0.3 } },
-		corrode: { cat: MoveCategory.PHY, flatBypass: {}, resistedBy: { chemResist: 1.0 } },
-		fumes: { cat: MoveCategory.ENR, flatBypass: {}, resistedBy: { chemResist: 0.5 } },
-		frost: { cat: MoveCategory.ENR, flatBypass: {}, resistedBy: { thermCond: 0.3 } },
-		heat: { cat: MoveCategory.ENR, flatBypass: {}, resistedBy: { thermCond: 0.3 } },
-		zap: { cat: MoveCategory.ENR, flatBypass: {}, resistedBy: { electroResist: 0.3 } },
-	};
+    task.spawn(() => {
+        const t0 = os.clock();
+        while (os.clock() - t0 < maxTime) {
+            if (pet._actionId !== my) return;
+            if (!tgt || tgt.State === "Dead" || !tgt.Model.Parent) break;
 
-	const Melee = {
-		fang: {
-			name: "fang",
-			atkType: "pierce",
-			baseAtk: { pAtk: 10, eAtk: 0 },
-			atkMult: { pAtk: 0.2, eAtk: 1.0 },
-			soak: 0.8,
-			castTime: 1.0,
-			cooldown: 0.2,
-			extraRange: 100,
-		},
-	};
+            const d = (tgt.HRP.Position.sub(pet.HRP.Position)).Magnitude;
+            if (d <= range) break;
 
-	const Movement = { dash: { speed: 420, time: 0.16, cooldown: 1.2, iFrames: 0.10 } };
+            pet.Hum.MoveTo(tgt.HRP.Position);
+            for (let i = 0; i < 6; i++) {
+                if (pet._actionId !== my) return;
+                task.wait(0.05);
+            }
+        }
+        if (pet._actionId !== my) return;
+        if (tgt && tgt.State !== "Dead") {
+            pet.HRP.CFrame = CFrame.lookAt(pet.HRP.Position, tgt.HRP.Position);
+            fn();
+        }
+        if (pet._actionId === my) pet.State = "Idle";
+    });
+}
 
-	const Projectiles = {
-		spikeThrow: {
-			name: "Throw Spike",
-			atkType: "pierce",
-			speed: 260,
-			life: 1.2,
-			radius: 4,
-			baseAtk: { pAtk: 3, eAtk: 4 },
-			atkMult: { pAtk: 0.15, eAtk: 0.35 },
-			cooldown: 0.6,
-		},
-	};
+function beginCD(caster, id, seconds) {
+    caster.SetCD(id, seconds);
+}
 
-	const species = {
-		mammal: ["felidae", "canidae", "ursidae"],
-		amphibian: ["urodela", "anura"],
-		arthropod: ["arachnid", "pterygota"],
-		reptile: ["squamata", "testudine"],
-		bird: ["columbiformes", "accipitriformes"],
-		robot: [],
-		ghost: [],
-	};
+// ===== Ability registry: read-only defs =====
+const REGISTRY = {};
 
-	// Helpers and Stats API
-	function clamp(v, lo, hi) {
-		return Math.max(lo, Math.min(hi, v));
-	}
+function def(a) {
+    REGISTRY[a.id] = a;
+    return a;
+}
 
-	function rollIV(rng, lo, hi) {
-		// Support Roblox-style rng with NextInteger(min,max) or a JS RNG function (returns 0..1)
-		if (rng && typeof rng.NextInteger === "function") {
-			// NextInteger is inclusive in Roblox; we want lo..hi inclusive
-			return lo + rng.NextInteger(0, hi - lo);
-		}
-		const rand = typeof rng === "function" ? rng : Math.random;
-		return lo + Math.floor(rand() * (hi - lo + 1));
-	}
+// Bite
+def({
+    id: "Bite",
+    key: "Q",
+    label: "Bite",
+    cd: 0.6,
+    cast(ctx) {
+        const c = ctx.caster;
+        let tgt = ctx.target;
+        if (!(tgt && tgt.HRP && tgt.State !== "Dead" && tgt.Model.Parent)) {
+            tgt = closestEnemy(c, 40);
+            if (!tgt) {
+                console.log("[Bite] no target");
+                return;
+            }
+        }
+        approachAndDo(c, tgt, 6, 3.0, () => {
+            tgt.Damage(c, { dtype: "slice", base: 8 });
+            beginCD(c, "Bite", 0.6);
+            toastAt(tgt.HRP, "BITE!", Color3.fromRGB(255, 210, 120));
+        });
+    },
+});
 
-	function levelGain(growth, lvl) {
-		const L = Math.max(1, Math.floor(lvl));
-		const mult = L - 1;
-		return {
-			hp: Math.floor((growth.hp || 0) * mult),
-			pAtk: Math.floor((growth.pAtk || 0) * mult),
-			eAtk: Math.floor((growth.eAtk || 0) * mult),
-			def: Math.floor((growth.def || 0) * mult),
-			spd: Math.floor((growth.spd || 0) * mult),
-			cast: Math.floor((growth.cast || 0) * mult),
-		};
-	}
+// Dash
+def({
+    id: "Dash",
+    key: "E",
+    label: "Dash",
+    cd: 3.0,
+    cast(ctx) {
+        const c = ctx.caster;
+        const look = c.HRP.CFrame.LookVector;
+        const bv = new Instance("BodyVelocity");
+        bv.MaxForce = new Vector3(1e6, 1e6, 1e6);
+        bv.Velocity = look.mul(60);
+        bv.Parent = c.HRP;
+        game.GetService("Debris").AddItem(bv, 0.2);
+        beginCD(c, "Dash", 3.0);
+        toastAt(c.HRP, "DASH!", Color3.fromRGB(180, 220, 255));
+    },
+});
 
-	const Stats = {
-		RollIVs(rng, familyKey) {
-			const f = Families[familyKey];
-			if (!f) return null;
-			const R = f.ivRange || {};
-			return {
-				hp: rollIV(rng, R.hp[0], R.hp[1]),
-				pAtk: rollIV(rng, R.pAtk[0], R.pAtk[1]),
-				eAtk: rollIV(rng, R.eAtk[0], R.eAtk[1]),
-				def: rollIV(rng, R.def[0], R.def[1]),
-				spd: rollIV(rng, R.spd[0], R.spd[1]),
-				cast: rollIV(rng, R.cast[0], R.cast[1]),
-			};
-		},
+// Stomp
+def({
+    id: "Stomp",
+    key: "R",
+    label: "Stomp",
+    cd: 5.0,
+    cast(ctx) {
+        const c = ctx.caster;
+        const center = ctx.point || c.HRP.Position.add(c.HRP.CFrame.LookVector.mul(6));
+        const r = 8;
+        for (const other of (_G.AllCreatures || [])) {
+            if (other !== c && other.Team !== c.Team && other.State !== "Dead" && other.HRP) {
+                if ((other.HRP.Position.sub(center)).Magnitude <= r) {
+                    other.Damage(c, { dtype: "heat", base: 10 });
+                }
+            }
+        }
+        beginCD(c, "Stomp", 5.0);
+        toastAt(c.HRP, "STOMP!", Color3.fromRGB(255, 180, 120));
+    },
+});
 
-		ComputeFinal(familyKey, level, iv, innerKey, outerKey) {
-			const f = Families[familyKey];
-			if (!f) return null;
-			const base = f.base || {};
-			const growth = f.growth || {};
-			const lv = levelGain(growth, Math.max(level || 1, 1));
+// Bolt
+def({
+    id: "Bolt",
+    key: "F",
+    label: "Bolt",
+    cd: 1.2,
+    cast(ctx) {
+        const c = ctx.caster;
+        const tgt = (ctx.target && ctx.target.HRP) ? ctx.target : closestEnemy(c, 60);
+        if (!tgt) return;
+        tgt.Damage(c, { dtype: "zap", base: 7 });
+        beginCD(c, "Bolt", 1.2);
+        toastAt(tgt.HRP, "BOLT!", Color3.fromRGB(200, 200, 255));
+    },
+});
 
-			const inner = Composites[innerKey] || { power: 1, speed: 1, physResist: 0, energyResist: 0, density: 1 };
-			const outer = Composites[outerKey] || inner;
+Abilities.Get = function (id) {
+    return REGISTRY[id];
+};
 
-			const powerMul = (inner.power + outer.power) * 0.5;
-			const speedMul = (inner.speed + outer.speed) * 0.5;
+Abilities.All = function () {
+    return REGISTRY;
+};
 
-			const s = {};
-			s.maxHP = Math.max(1, (base.hp || 0) + (iv.hp || 0) + (lv.hp || 0));
-			s.pAtk = Math.max(1, Math.floor(((base.pAtk || 0) + (iv.pAtk || 0) + (lv.pAtk || 0)) * powerMul));
-			s.eAtk = Math.max(1, Math.floor(((base.eAtk || 0) + (iv.eAtk || 0) + (lv.eAtk || 0)) * powerMul));
-			s.def = Math.max(0, (base.def || 0) + (iv.def || 0) + (lv.def || 0));
-			s.spd = Math.max(1, Math.floor(((base.spd || 0) + (iv.spd || 0) + (lv.spd || 0)) * speedMul));
-			s.cast = Math.max(1, (base.cast || 0) + (iv.cast || 0) + (lv.cast || 0));
+Abilities.GiveDefaults = function (pet, list) {
+    const chosen = list || ["Bite", "Dash"];
+    pet.Abilities = pet.Abilities || {};
+    for (const id of chosen) {
+        const defn = REGISTRY[id];
+        if (defn) {
+            pet.Abilities[id] = {
+                id: id,
+                key: defn.key,
+                label: defn.label,
+                cd: defn.cd,
+                cast: (caster, ctxOverride) => {
+                    const ctx = { caster: caster };
+                    if (ctxOverride) {
+                        for (const [k, v] of Object.entries(ctxOverride)) {
+                            ctx[k] = v;
+                        }
+                    }
+                    defn.cast(ctx);
+                },
+            };
+        }
+    }
+    return pet.Abilities;
+};
 
-			s.physResist = clamp((inner.physResist + outer.physResist) * 0.5, 0, 0.9);
-			s.energyResist = clamp((inner.energyResist + outer.energyResist) * 0.5, 0, 0.9);
-			s.density = (inner.density + outer.density) * 0.5;
-			return s;
-		},
-	};
+const Util = {
+    key(cx, cz) {
+        return `${cx}|${cz}`;
+    },
+    rngFor(cx, cz, seed) {
+        const hash = (cx * 73856093) ^ (cz * 19349663) ^ (seed * 9167);
+        const masked = hash & 0x7fffffff;
+        return new Math.seedrandom(masked);
+    },
+};
+const WorldGen = {
+    biomeMix(x, z, seed = Params.SEED) {
+        return BiomeNoise.biomeMix(x, z, seed);
+    },
+    heightAt(x, z, seed = Params.SEED) {
+        return Height.sample(x, z, seed);
+    },
+    pickMaterials(weights) {
+        return Materials.pickMaterials(weights);
+    },
+};
+
+const WorldParams = {
+    CELL: 20,
+    WATER_BASE: 8,
+    SEED: 1335,
+};
+
+const Biomes = {
+    Taiga: {
+        ground: 'Snow',
+        high: 'Ice',
+        density: 1.3,
+    },
+    Meadow: {
+        ground: 'Grass',
+        high: 'Rock',
+        density: 1.0,
+    },
+    Beach: {
+        ground: 'Sand',
+        high: 'Rock',
+        density: 0.6,
+    },
+    Swamp: {
+        ground: 'Mud',
+        high: 'Ground',
+        density: 0.9,
+    },
+    Mountains: {
+        ground: 'Ground',
+        high: 'Rock',
+        density: 0.7,
+    },
+    Hills: {
+        ground: 'Grass',
+        high: 'Grass',
+        density: 0.9,
+    },
+};
+
+const Materials = {
+    pickMaterials(weights) {
+        let best = 'Meadow';
+        let bestW = -1;
+
+        for (const [k, w] of Object.entries(weights)) {
+            if (w > bestW) {
+                best = k;
+                bestW = w;
+            }
+        }
+
+        const biome = Biomes[best] || Biomes.Meadow;
+        return { ground: biome.ground, high: biome.high, biome: best };
+    },
+};
+
+clamp01 = (value, min, max) => Math.max(min, Math.min(max, value));
+
+const SHAPE = {
+    Taiga: { amp: 142, freq: 0.018, rough: 0.55, base: 2, water: 0 },
+    Meadow: { amp: 118, freq: 0.006, rough: 0.30, base: 0, water: 0 },
+    Beach: { amp: 106, freq: 0.010, rough: 0.25, base: -3, water: -1 },
+    Swamp: { amp: 108, freq: 0.004, rough: 0.25, base: -1, water: 2 },
+};
+
+function fbm(x, z, seed, f, rough) {
+    let sum = 0;
+    let amp = 1;
+    rough = clamp(rough, 0.15, 0.95);
+    for (let i = 1; i <= 3; i++) {
+        sum += noise(x * f, z * f, (seed || 0) * i * 0.137) * amp;
+        f *= 2;
+        amp *= rough;
+    }
+    return sum;
+}
+
+const Heightfield = {
+    sample(x, z, seed) {
+        const w = BiomeNoise.biomeMix(x, z, seed);
+        let amp = 0, freq = 0, rough = 0, base = 0, water = 0;
+
+        for (const [name, wt] of Object.entries(w)) {
+            const p = SHAPE[name];
+            if (p) {
+                amp += wt * p.amp;
+                freq += wt * p.freq;
+                rough += wt * p.rough;
+                base += wt * p.base;
+                water += wt * p.water;
+            }
+        }
+
+        const n = fbm(x, z, seed, freq, rough);
+        const nh = clamp(0.5 + 0.5 * n, 0, 1);
+        const yG = base + amp * nh;
+        const yW = Params.WATER_BASE + water;
+
+        return { yG, yW, weights: w };
+    },
+};
+
+const P = WorldParams;
+
+const cache = {};
+
+function weightsAtCell(ix, iz, seed = 0) {
+    const k = `${ix}|${iz}`;
+    if (cache[k]) return cache[k];
+
+    const x = (ix + 0.5) * P.CELL;
+    const z = (iz + 0.5) * P.CELL;
+    const T = clamp(0.5 + 0.5 * noise(x * 0.00035, z * 0.00035, seed * 0.11), 0, 1);
+    const W = clamp(0.5 + 0.5 * noise(x * 0.00070, z * 0.00070, seed * 0.37), 0, 1);
+
+    const wTaiga = (1 - T) * (1 - W);
+    const wMeadow = T * (1 - W);
+    const wSwamp = (1 - T) * W * 0.7 + T * W * 0.3;
+
+    const coast = 0.5 + 0.5 * noise(x * 0.00090, z * 0.00090, seed * 0.59);
+    const nearCoast = clamp(1 - Math.abs(coast - 0.5) * 8, 0, 1);
+    const wBeach = nearCoast * 0.9;
+
+    const s = wTaiga + wMeadow + wSwamp + wBeach;
+    const out = s < 1e-6 ? { Meadow: 1 } : {
+        Taiga: wTaiga / s,
+        Meadow: wMeadow / s,
+        Swamp: wSwamp / s,
+        Beach: wBeach / s,
+    };
+
+    cache[k] = out;
+    return out;
+}
+
+function addScaled(out, t, s) {
+    for (const [k, v] of Object.entries(t)) {
+        out[k] = (out[k] || 0) + v * s;
+    }
+}
+
+const BiomeNoise = {
+    biomeMix(x, z, seed) {
+        const gx = Math.floor(x / P.CELL);
+        const gz = Math.floor(z / P.CELL);
+        const fx = x / P.CELL - gx;
+        const fz = z / P.CELL - gz;
+
+        const w00 = weightsAtCell(gx, gz, seed);
+        const w10 = weightsAtCell(gx + 1, gz, seed);
+        const w01 = weightsAtCell(gx, gz + 1, seed);
+        const w11 = weightsAtCell(gx + 1, gz + 1, seed);
+
+        const out = {};
+        addScaled(out, w00, (1 - fx) * (1 - fz));
+        addScaled(out, w10, fx * (1 - fz));
+        addScaled(out, w01, (1 - fx) * fz);
+        addScaled(out, w11, fx * fz);
+
+        let s = 0;
+        for (const v of Object.values(out)) s += v;
+        if (s > 1e-6) {
+            for (const k in out) {
+                out[k] /= s;
+            }
+        }
+        return out;
+    },
+};
+// ServerScriptService/Game/AbilityService.js
+
+const clamp02 = (x) => Math.max(0, Math.min(1, x));
+
+const dotProps = (props, comp) => {
+  let s = 0;
+  for (const [k, coef] of Object.entries(props)) {
+    s += (comp[k] || 0) * coef;
+  }
+  return s;
+};
+
+const baseFrom = (move, caster, cat) => {
+  const b = move.baseAtk || {};
+  const m = move.atkMult || {};
+  const cs = caster.stats || {};
+  if (cat === Moves.MoveCat.PHY) {
+    return (b.pAtk || 0) + (cs.pAtk || 0) * (m.pAtk || 0);
+  } else {
+    return (b.eAtk || 0) + (cs.eAtk || 0) * (m.eAtk || 0);
+  }
+};
+
+const computeDamage = (moveId, atkTypeKey, caster, target) => {
+  const tdef = target.composite || {};
+  const moveType = Moves.MoveTypes[atkTypeKey];
+  if (!moveType) return 0;
+  const cat = moveType.cat;
+  const move = Moves.Melee[moveId] || Moves.Projectile[moveId];
+  if (!move) return 0;
+
+  const base = baseFrom(move, caster, cat);
+  const flatBypass = clamp01(dotProps(moveType.flatBypass, tdef));
+  const resist = clamp01(dotProps(moveType.resistedBy, tdef));
+
+  const after = base * (1 - flatBypass) * (1 - resist);
+  if (cat === Moves.MoveCat.PHY) {
+    const def = (target.stats && target.stats.def) || 0;
+    return Math.max(1, Math.floor(after - 0.3 * def + 0.5));
+  } else {
+    return Math.max(1, Math.floor(after + 0.5));
+  }
+};
+
+
+// effect hook
+// const applyBerryEffect = (p, kind) => {
+// 	// TODO: call your CreatureService here
+// 	if (kind === 'red') {
+// 		print((`Heal used by ${p.Name}`));
+// 	} else if (kind === 'yellow') {
+// 		print((`Strength used by ${p.Name}`));
+// 	} else if (kind === 'blue') {
+// 		print((`Revive used by ${p.Name}`));
+// 	}
+// };
+
+// // picking from bush
+// const hookBush = (bush) => {
+// 	const prompt = findFirstChildOfClass(bush, 'ProximityPrompt');
+// 	if (!prompt) return;
+// 	let busy = false;
+// 	prompt.onTrigger = (player) => {
+// 		if (busy) return;
+// 		busy = true;
+
+// 		const kind = bush.attributes?.BerryKind;
+// 		let uses = Math.max(0, bush.attributes?.Uses || 0);
+
+// 		if ((kind === 'red' || kind === 'yellow' || kind === 'blue') && uses > 0) {
+// 			console.log(`Giving ${kind} berry to player ${player.name}`);
+// 			uses -= 1;
+// 			bush.attributes.Uses = uses;
+
+// 			if (bush.size > 3) {
+// 				bush.size -= 0.4;
+// 			}
+
+// 			if (uses <= 0) {
+// 				console.log(`Berry bush ${bush.name} is depleted and removed.`);
+// 			}
+// 		}
+
+// 		busy = false;
+// 	};
+// };
+
+// Simplified and platform-independent version of the code
+
+// Custom tagging system
+const taggedObjects = new Map();
+
+function addTag(object, tag) {
+  if (!taggedObjects.has(tag)) {
+    taggedObjects.set(tag, []);
+  }
+  taggedObjects.get(tag).push(object);
+}
+
+function getTagged(tag) {
+  return taggedObjects.get(tag) || [];
+}
+
+function removeTag(object, tag) {
+  if (taggedObjects.has(tag)) {
+    const objects = taggedObjects.get(tag);
+    taggedObjects.set(tag, objects.filter((obj) => obj !== object));
+  }
+}
+
+// Example usage of tagging system
+const berryBush = { name: 'BerryBush1', type: 'BasePart' };
+addTag(berryBush, 'BerryBush');
+
+for (const inst of getTagged('BerryBush')) {
+  if (inst.type === 'BasePart') {
+    console.log(`Processing berry bush: ${inst.name}`);
+  }
+}
+
+// Simplified function to find the first child of a specific type
+function findFirstChildOfClass(parent, className) {
+  if (!parent || !parent.children) return null;
+
+  for (const child of parent.children) {
+    if (child.type === className) {
+      return child;
+    }
+  }
+  return null;
+}
+
+// Example usage of findFirstChildOfClass
+const bush = {
+  children: [
+    { type: 'ProximityPrompt', name: 'Prompt1' },
+    { type: 'OtherType', name: 'OtherChild' },
+  ],
+};
+
+const prompt = findFirstChildOfClass(bush, 'ProximityPrompt');
+if (prompt) {
+  console.log(`Found ProximityPrompt: ${prompt.name}`);
+}
+
+// Simplified hookBush function
+function hookBush(bush) {
+  const prompt = findFirstChildOfClass(bush, 'ProximityPrompt');
+  if (!prompt) return;
+
+  let busy = false;
+  prompt.onTrigger = (player) => {
+    if (busy) return;
+    busy = true;
+
+    const kind = bush.attributes?.BerryKind;
+    let uses = Math.max(0, bush.attributes?.Uses || 0);
+
+    if ((kind === 'red' || kind === 'yellow' || kind === 'blue') && uses > 0) {
+      console.log(`Giving ${kind} berry to player ${player.name}`);
+      uses -= 1;
+      bush.attributes.Uses = uses;
+
+      if (bush.size > 3) {
+        bush.size -= 0.4;
+      }
+
+      if (uses <= 0) {
+        console.log(`Berry bush ${bush.name} is depleted and removed.`);
+      }
+    }
+
+    busy = false;
+  };
+}
+
+// Example usage of hookBush
+// hookBush({
+//   name: 'BerryBush1',
+//   attributes: { BerryKind: 'red', Uses: 5 },
+//   size: 4,
+//   children: [{ type: 'ProximityPrompt', name: 'Prompt1' }],
+// });
+
+// Centralized Event System
+const EventEmitter = require('events');
+const eventEmitter = new EventEmitter();
+
+// Simplified Inventory System
+const Inventory = {
+  items: {},
+
+  tryUse(player, kind) {
+    console.log(`Player ${player.name} is trying to use ${kind}`);
+    if (this.items[kind] > 0) {
+      this.items[kind] -= 1;
+      return true;
+    }
+    return false;
+  },
+
+  addItem(kind, amount) {
+    this.items[kind] = (this.items[kind] || 0) + amount;
+  },
+};
+
+// Simplified Effect Application
+function applyBerryEffect(player, kind) {
+  console.log(`Applying ${kind} effect to ${player.name}`);
+}
+
+// Centralized Event Handling
+function setupEventHandlers() {
+  eventEmitter.on('useBerry', (player, kind) => {
+    if (['red', 'yellow', 'blue'].includes(kind)) {
+      if (Inventory.tryUse(player, kind)) {
+        applyBerryEffect(player, kind);
+      } else {
+        console.log(`Player ${player.name} has no ${kind} berries left.`);
+      }
+    } else {
+      console.log(`Invalid berry kind: ${kind}`);
+    }
+  });
+}
+
+// Example Usage
+setupEventHandlers();
+Inventory.addItem('red', 5);
+Inventory.addItem('yellow', 3);
+Inventory.addItem('blue', 2);
+
+const player = { name: 'Player1' };
+eventEmitter.emit('useBerry', player, 'red');
+eventEmitter.emit('useBerry', player, 'yellow');
+eventEmitter.emit('useBerry', player, 'blue');
+eventEmitter.emit('useBerry', player, 'green'); // Invalid berry kind
+
+// Game configuration class
+class GameConfigClient {
+  constructor() {
+    this.players = new Map();
+    this.MIN_R = 3;
+    this.MAX_R = 7;
+    this.STARTERS = ['Pyro', 'Aqua', 'Terra'];
+  }
+
+  addPlayer(playerId) {
+    this.players.set(playerId, {
+      radiusChunks: 3,
+      starterChosen: false,
+      starterId: '',
+    });
+  }
+
+  setRadius(playerId, radius) {
+    const player = this.players.get(playerId);
+    if (player) {
+      player.radiusChunks = Math.max(this.MIN_R, Math.min(this.MAX_R, Math.floor(radius)));
+    }
+  }
+
+  chooseStarter(playerId, starterId) {
+    const player = this.players.get(playerId);
+    if (player && !player.starterChosen && this.STARTERS.includes(starterId)) {
+      player.starterChosen = true;
+      player.starterId = starterId;
+    }
+  }
+}
+
+// Roster management class
+class RosterServiceClient {
+  constructor() {
+    this.rosters = new Map();
+  }
+
+  getRoster(playerId) {
+    return this.rosters.get(playerId) || { list: {}, active: null };
+  }
+
+  chooseStarter(playerId, family) {
+    const roster = this.getRoster(playerId);
+    if (!roster.list[family]) {
+      roster.list[family] = this.createCreature(family);
+      roster.active = roster.active || family;
+    }
+  }
+
+  createCreature(family) {
+    return {
+      id: family,
+      name: family,
+      stats: {
+        pAtk: 10,
+        eAtk: 8,
+        def: 6,
+        speed: 7,
+        maxHP: 30,
+        hp: 30,
+      },
+      abilities: [{ id: 'basic_attack', name: 'Basic Attack', cd: 0.8 }],
+    };
+  }
+}
+
+
+
+//JS only stuff
+const canvas = document.createElement('canvas');
+canvas.width = 800; 
+canvas.height = 600;
+document.body.appendChild(canvas); 
+const ctx = canvas.getContext('2d');
+
+// Game state
+const gameState = {
+  players: [
+    { x: 100, y: 100, vx: 2, vy: 1, color: 'red' },
+    { x: 200, y: 150, vx: -1, vy: 2, color: 'blue' },
+  ],
+};
+
+function update(deltaTime) {
+  for (const player of gameState.players) {
+    player.x += player.vx * deltaTime;
+    player.y += player.vy * deltaTime;
+
+    if (player.x < 0 || player.x > canvas.width) player.vx *= -1;
+    if (player.y < 0 || player.y > canvas.height) player.vy *= -1;
+  }
+}
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear the canvas
+
+  // Draw players
+  for (const player of gameState.players) {
+    ctx.fillStyle = player.color;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Debug info: Draw velocity vector
+    ctx.strokeStyle = 'white';
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.lineTo(player.x + player.vx * 10, player.y + player.vy * 10);
+    ctx.stroke();
+  }
+}
+
+// Game loop
+let lastTime = 0;
+function gameLoop(timestamp) {
+  const deltaTime = (timestamp - lastTime) / 1000; // Convert to seconds
+  lastTime = timestamp;
+
+  update(deltaTime); // Update game state
+  render(); // Render the game state
+
+  requestAnimationFrame(gameLoop); // Loop
+}
+
+// Start the game loop
+requestAnimationFrame(gameLoop);
