@@ -1,0 +1,294 @@
+const solid, liquid, gas, plasma = 1, 2, 3, 4
+
+const compososites = {
+	organicMammal : { name:"Organic Mammal", matter:solid, physResist:0.10, energyResist:0.05, power:1.00, speed:1.00, density:0.80 },
+	metal         : { name:"Metal",          matter:solid, physResist:0.25, energyResist:0.00, power:0.95, speed:0.90, density:1.10 },
+	slime         : { name:"Slime",          matter:solid, physResist:0.05, energyResist:0.10, power:0.95, speed:1.05, density:0.70 },
+}
+//ReplicatedStorage/Modules/Data/Families.lua
+const families ={
+	felidae : {
+		base : { hp:34, pAtk:8, eAtk:4, def:5, spd:7, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.0, pAtk:1.2, eAtk:0.8, def:0.9, spd:1.3, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 5,
+	},
+	canidae : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+	},
+	ursidae : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+	},
+	urodela : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+	},
+	anura : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+	},
+	arachnid : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+	},
+	pterygota : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+	},
+	squamata : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+	},
+	testudine : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+	},
+	columbiformes : {
+		base : { hp:32, pAtk:7, eAtk:4, def:5, spd:8, cast:5 },
+		ivRange : { hp:{0,6}, pAtk:{0,4}, eAtk:{0,3}, def:{0,3}, spd:{0,5}, cast:{0,3} },
+		growth : { hp:2.1, pAtk:1.1, eAtk:0.8, def:0.9, spd:1.4, cast:0.8 },
+		comp : { inner:"organicMammal", outer:"organicMammal" },
+		size : 10,
+    }
+}
+	// Converted and corrected JavaScript version of the original mixed Lua/JS file.
+
+	const [SOLID, LIQUID, GAS, PLASMA] = [1, 2, 3, 4];
+
+	const Composites = {
+		organicMammal: { name: "Organic Mammal", matter: SOLID, physResist: 0.10, energyResist: 0.05, power: 1.00, speed: 1.00, density: 0.80 },
+		metal: { name: "Metal", matter: SOLID, physResist: 0.25, energyResist: 0.00, power: 0.95, speed: 0.90, density: 1.10 },
+		slime: { name: "Slime", matter: SOLID, physResist: 0.05, energyResist: 0.10, power: 0.95, speed: 1.05, density: 0.70 },
+	};
+
+	const Families = {
+		felidae: {
+			base: { hp: 34, pAtk: 8, eAtk: 4, def: 5, spd: 7, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.0, pAtk: 1.2, eAtk: 0.8, def: 0.9, spd: 1.3, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 5,
+		},
+		canidae: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		ursidae: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		urodela: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		anura: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		arachnid: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		pterygota: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		squamata: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		testudine: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		columbiformes: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+		accipitriformes: {
+			base: { hp: 32, pAtk: 7, eAtk: 4, def: 5, spd: 8, cast: 5 },
+			ivRange: { hp: [0, 6], pAtk: [0, 4], eAtk: [0, 3], def: [0, 3], spd: [0, 5], cast: [0, 3] },
+			growth: { hp: 2.1, pAtk: 1.1, eAtk: 0.8, def: 0.9, spd: 1.4, cast: 0.8 },
+			comp: { inner: "organicMammal", outer: "organicMammal" },
+			size: 10,
+		},
+	};
+
+	// Move data
+	const MoveCategory = { PHY: "physical", ENR: "energy" };
+
+	const MoveTypes = {
+		blunt: { cat: MoveCategory.PHY, flatBypass: { hard: 0.2 }, resistedBy: { elastic: 0.2 } },
+		drill: { cat: MoveCategory.PHY, flatBypass: { tough: 0.2, hard: 0.2 }, resistedBy: { porosity: 0.2 } },
+		pierce: { cat: MoveCategory.PHY, flatBypass: { porosity: 0.3 }, resistedBy: { hard: 0.3 } },
+		slice: { cat: MoveCategory.PHY, flatBypass: { elastic: 0.3 }, resistedBy: { tough: 0.3 } },
+		smash: { cat: MoveCategory.PHY, flatBypass: { hard: 0.3 }, resistedBy: { tough: 0.3 } },
+		corrode: { cat: MoveCategory.PHY, flatBypass: {}, resistedBy: { chemResist: 1.0 } },
+		fumes: { cat: MoveCategory.ENR, flatBypass: {}, resistedBy: { chemResist: 0.5 } },
+		frost: { cat: MoveCategory.ENR, flatBypass: {}, resistedBy: { thermCond: 0.3 } },
+		heat: { cat: MoveCategory.ENR, flatBypass: {}, resistedBy: { thermCond: 0.3 } },
+		zap: { cat: MoveCategory.ENR, flatBypass: {}, resistedBy: { electroResist: 0.3 } },
+	};
+
+	const Melee = {
+		fang: {
+			name: "fang",
+			atkType: "pierce",
+			baseAtk: { pAtk: 10, eAtk: 0 },
+			atkMult: { pAtk: 0.2, eAtk: 1.0 },
+			soak: 0.8,
+			castTime: 1.0,
+			cooldown: 0.2,
+			extraRange: 100,
+		},
+	};
+
+	const Movement = { dash: { speed: 420, time: 0.16, cooldown: 1.2, iFrames: 0.10 } };
+
+	const Projectiles = {
+		spikeThrow: {
+			name: "Throw Spike",
+			atkType: "pierce",
+			speed: 260,
+			life: 1.2,
+			radius: 4,
+			baseAtk: { pAtk: 3, eAtk: 4 },
+			atkMult: { pAtk: 0.15, eAtk: 0.35 },
+			cooldown: 0.6,
+		},
+	};
+
+	const species = {
+		mammal: ["felidae", "canidae", "ursidae"],
+		amphibian: ["urodela", "anura"],
+		arthropod: ["arachnid", "pterygota"],
+		reptile: ["squamata", "testudine"],
+		bird: ["columbiformes", "accipitriformes"],
+		robot: [],
+		ghost: [],
+	};
+
+	// Helpers and Stats API
+	function clamp(v, lo, hi) {
+		return Math.max(lo, Math.min(hi, v));
+	}
+
+	function rollIV(rng, lo, hi) {
+		// Support Roblox-style rng with NextInteger(min,max) or a JS RNG function (returns 0..1)
+		if (rng && typeof rng.NextInteger === "function") {
+			// NextInteger is inclusive in Roblox; we want lo..hi inclusive
+			return lo + rng.NextInteger(0, hi - lo);
+		}
+		const rand = typeof rng === "function" ? rng : Math.random;
+		return lo + Math.floor(rand() * (hi - lo + 1));
+	}
+
+	function levelGain(growth, lvl) {
+		const L = Math.max(1, Math.floor(lvl));
+		const mult = L - 1;
+		return {
+			hp: Math.floor((growth.hp || 0) * mult),
+			pAtk: Math.floor((growth.pAtk || 0) * mult),
+			eAtk: Math.floor((growth.eAtk || 0) * mult),
+			def: Math.floor((growth.def || 0) * mult),
+			spd: Math.floor((growth.spd || 0) * mult),
+			cast: Math.floor((growth.cast || 0) * mult),
+		};
+	}
+
+	const Stats = {
+		RollIVs(rng, familyKey) {
+			const f = Families[familyKey];
+			if (!f) return null;
+			const R = f.ivRange || {};
+			return {
+				hp: rollIV(rng, R.hp[0], R.hp[1]),
+				pAtk: rollIV(rng, R.pAtk[0], R.pAtk[1]),
+				eAtk: rollIV(rng, R.eAtk[0], R.eAtk[1]),
+				def: rollIV(rng, R.def[0], R.def[1]),
+				spd: rollIV(rng, R.spd[0], R.spd[1]),
+				cast: rollIV(rng, R.cast[0], R.cast[1]),
+			};
+		},
+
+		ComputeFinal(familyKey, level, iv, innerKey, outerKey) {
+			const f = Families[familyKey];
+			if (!f) return null;
+			const base = f.base || {};
+			const growth = f.growth || {};
+			const lv = levelGain(growth, Math.max(level || 1, 1));
+
+			const inner = Composites[innerKey] || { power: 1, speed: 1, physResist: 0, energyResist: 0, density: 1 };
+			const outer = Composites[outerKey] || inner;
+
+			const powerMul = (inner.power + outer.power) * 0.5;
+			const speedMul = (inner.speed + outer.speed) * 0.5;
+
+			const s = {};
+			s.maxHP = Math.max(1, (base.hp || 0) + (iv.hp || 0) + (lv.hp || 0));
+			s.pAtk = Math.max(1, Math.floor(((base.pAtk || 0) + (iv.pAtk || 0) + (lv.pAtk || 0)) * powerMul));
+			s.eAtk = Math.max(1, Math.floor(((base.eAtk || 0) + (iv.eAtk || 0) + (lv.eAtk || 0)) * powerMul));
+			s.def = Math.max(0, (base.def || 0) + (iv.def || 0) + (lv.def || 0));
+			s.spd = Math.max(1, Math.floor(((base.spd || 0) + (iv.spd || 0) + (lv.spd || 0)) * speedMul));
+			s.cast = Math.max(1, (base.cast || 0) + (iv.cast || 0) + (lv.cast || 0));
+
+			s.physResist = clamp((inner.physResist + outer.physResist) * 0.5, 0, 0.9);
+			s.energyResist = clamp((inner.energyResist + outer.energyResist) * 0.5, 0, 0.9);
+			s.density = (inner.density + outer.density) * 0.5;
+			return s;
+		},
+	};
