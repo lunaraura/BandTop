@@ -1,0 +1,80 @@
+-- ReplicatedStorage/Modules/Data/Families.lua
+return {
+	felidae = {
+		base = { hp=34, pAtk=8, eAtk=4, def=5, spd=7, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.0, pAtk=1.2, eAtk=0.8, def=0.9, spd=1.3, cast=0.8 }, -- per level
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 5,
+	},
+	canidae = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	ursidae = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	urodela = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	anura = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	arachnid = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	pterygota = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	squamata = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	testudine = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	columbiformes = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+	accipitriformes = {
+		base = { hp=32, pAtk=7, eAtk=4, def=5, spd=8, cast=5 },
+		ivRange = { hp={0,6}, pAtk={0,4}, eAtk={0,3}, def={0,3}, spd={0,5}, cast={0,3} },
+		growth = { hp=2.1, pAtk=1.1, eAtk=0.8, def=0.9, spd=1.4, cast=0.8 },
+		comp = { inner="organicMammal", outer="organicMammal" },
+		size = 10,
+	},
+}
