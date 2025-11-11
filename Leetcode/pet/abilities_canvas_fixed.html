@@ -1,0 +1,346 @@
+
+<!doctype html>
+<html>
+<meta charset="utf-8">
+<title>Abilities Sandbox (Browser Canvas)</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0e14;color:#eaeefb;font-family:system-ui}
+  #ui{position:fixed;inset:auto 0 0 0;display:flex;gap:.5rem;padding:.5rem .75rem;background:#1117}
+  button{border:0;border-radius:.5rem;padding:.5rem .8rem;background:#2a3245;color:#eaeefb;cursor:pointer}
+  #log{position:fixed;left:0;top:0;max-height:40vh;overflow:auto;font-size:12px;background:#1118;padding:.5rem .75rem;white-space:pre-wrap}
+  #game{display:block;width:100vw;height:100vh;touch-action:manipulation}
+</style>
+<canvas id="game"></canvas>
+<div id="ui">
+  <button id="btnBite">Bite (1)</button>
+  <button id="btnDash">Dash (2)</button>
+  <button id="btnStomp">Stomp (3)</button>
+  <button id="btnBolt">Bolt (4)</button>
+  <span style="margin-left:auto" id="hud"></span>
+</div>
+<pre id="log"></pre>
+<script>
+// ===== Utilities =====
+const clamp = (v,a,b)=> Math.max(a, Math.min(b, v));
+const clamp01 = v => clamp(v,0,1);
+class RNG{
+  constructor(seed=123456789){ this.s = (seed>>>0)||1; }
+  next(){ this.s = (1664525*this.s + 1013904223)>>>0; return this.s; }
+  float(){ return (this.next() & 0xffff)/0x10000; }
+  range(a,b){ return a + this.float()*(b-a); }
+}
+class Vec2{
+  constructor(x=0,y=0){ this.x=x; this.y=y; }
+  clone(){ return new Vec2(this.x,this.y); }
+  add(v){ this.x+=v.x; this.y+=v.y; return this; }
+  sub(v){ this.x-=v.x; this.y-=v.y; return this; }
+  mul(s){ this.x*=s; this.y*=s; return this; }
+  len(){ return Math.hypot(this.x,this.y); }
+  unit(){ const l=this.len()||1; return new Vec2(this.x/l,this.y/l); }
+  static sub(a,b){ return new Vec2(a.x-b.x, a.y-b.y); }
+}
+// Simple 2D simplex noise (tiny)
+const F2=0.5*(Math.sqrt(3)-1), G2=(3-Math.sqrt(3))/6;
+const grad3=[[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+const p256 = new Uint8Array(256); for(let i=0;i<256;i++) p256[i]=i;
+for(let i=255;i>0;i--){ const j=(Math.random()*256)|0; const t=p256[i]; p256[i]=p256[j]; p256[j]=t; }
+const perm=new Uint8Array(512); for(let i=0;i<512;i++) perm[i]=p256[i&255];
+function dot2(g,x,y){ return g[0]*x + g[1]*y; }
+function noise2(xin,yin){
+  let n0=0,n1=0,n2=0;
+  const s=(xin+yin)*F2;
+  const i=Math.floor(xin+s), j=Math.floor(yin+s);
+  const t=(i+j)*G2, X0=i-t, Y0=j-t;
+  const x0=xin-X0, y0=yin-Y0;
+  let i1,j1; if (x0>y0){ i1=1;j1=0; } else { i1=0;j1=1; }
+  const x1=x0-i1+G2, y1=y0-j1+G2;
+  const x2=x0-1+2*G2, y2=y0-1+2*G2;
+  const ii=i&255, jj=j&255;
+  const gi0=perm[ii+perm[jj]]%8;
+  const gi1=perm[ii+i1+perm[jj+j1]]%8;
+  const gi2=perm[ii+1+perm[jj+1]]%8;
+  let t0=0.5-x0*x0-y0*y0; if(t0>0){ t0*=t0; n0=t0*t0*dot2(grad3[gi0],x0,y0); }
+  let t1=0.5-x1*x1-y1*y1; if(t1>0){ t1*=t1; n1=t1*t1*dot2(grad3[gi1],x1,y1); }
+  let t2=0.5-x2*x2-y2*y2; if(t2>0){ t2*=t2; n2=t2*t2*dot2(grad3[gi2],x2,y2); }
+  return 70*(n0+n1+n2);
+}
+// ===== Minimal data needed for damage =====
+const MoveCat = { PHY:"physical", ENR:"energy" };
+const MoveTypes = {
+  slice:{ cat:MoveCat.PHY, flatBypass:{elastic:0.3},  resistedBy:{tough:0.3} },
+  zap:{   cat:MoveCat.ENR, flatBypass:{},             resistedBy:{electroResist:0.3} },
+  heat:{  cat:MoveCat.ENR, flatBypass:{},             resistedBy:{thermCond:0.3} },
+};
+const Moves = {
+  Melee:{
+    Bite:{ id:"Bite", atkType:"slice", baseAtk:{pAtk:8,eAtk:0}, atkMult:{pAtk:0.2,eAtk:0.0}, cooldown:0.6 }
+  },
+  Projectile:{},
+  MoveCat, MoveTypes
+};
+function dotProps(props, comp){ let s=0; if(!props) return 0;
+  for(const [k,c] of Object.entries(props)) s += (comp?.[k]||0)*c;
+  return s;
+}
+function baseFrom(move, caster, cat){
+  const b=move.baseAtk||{}, m=move.atkMult||{}, cs=caster.stats||{};
+  if(cat===MoveCat.PHY) return (b.pAtk||0) + (cs.pAtk||0)*(m.pAtk||0);
+  return (b.eAtk||0) + (cs.eAtk||0)*(m.eAtk||0);
+}
+function computeDamage(moveId, atkTypeKey, caster, target){
+  const tdef=target.composite||{};
+  const moveType=Moves.MoveTypes[atkTypeKey]; if(!moveType) return 0;
+  const cat=moveType.cat;
+  const move = Moves.Melee[moveId] || Moves.Projectile[moveId];
+  if(!move) return 0;
+  const base = baseFrom(move, caster, cat);
+  const flatBypass = clamp01(dotProps(moveType.flatBypass, tdef));
+  const resist     = clamp01(dotProps(moveType.resistedBy, tdef));
+  const after = base * (1-flatBypass) * (1-resist);
+  if (cat===MoveCat.PHY){
+    const def=(target.stats&&target.stats.def)||0;
+    return Math.max(1, Math.floor(after - 0.3*def + 0.5));
+  } else {
+    return Math.max(1, Math.floor(after + 0.5));
+  }
+}
+// ===== Entities and registry =====
+let NEXT_ID=1;
+class Entity{
+  constructor({x=0,y=0,team="A"}={}){
+    this.id=NEXT_ID++;
+    this.pos=new Vec2(x,y);
+    this.vel=new Vec2();
+    this.r=12;
+    this.team=team;
+    this.stats={ pAtk:10, eAtk:6, def:4, maxHP:30 };
+    this.hp=this.stats.maxHP;
+    this.alive=true;
+    this.composite={ hard: team==="B"?0.2:0.1, elastic:0.1 };
+    this.cooldowns=new Map();
+  }
+  cdReady(key,t){ return t >= (this.cooldowns.get(key)||0); }
+  setCd(key,sec,t){ this.cooldowns.set(key, t+(sec||1)); }
+  damage(n){ if(!this.alive) return; this.hp=Math.max(0, this.hp-n); if(this.hp<=0) this.alive=false; }
+  update(dt){ this.pos.add(this.vel.clone().mul(dt)); this.vel.mul(0.9); }
+  draw(g){
+    const hpR=this.hp/this.stats.maxHP;
+    g.beginPath(); g.arc(this.pos.x,this.pos.y,this.r+2,0,Math.PI*2); g.fillStyle="#0008"; g.fill();
+    g.beginPath(); g.arc(this.pos.x,this.pos.y,this.r,0,Math.PI*2); g.fillStyle=this.team==="A"?"#7ce":"#e77"; g.fill();
+    g.fillStyle="#222"; g.fillRect(this.pos.x-14, this.pos.y-this.r-10, 28, 4);
+    g.fillStyle= hpR>0.5? "#3c5" : hpR>0.25? "#db3" : "#e55"; g.fillRect(this.pos.x-14, this.pos.y-this.r-10, 28*hpR, 4);
+  }
+}
+const Abilities = {};
+const REGISTRY = {};
+function def(a){ REGISTRY[a.id]=a; return a; }
+Abilities.Get = id => REGISTRY[id];
+Abilities.All = () => REGISTRY;
+Abilities.GiveDefaults = (pet, list)=>{
+  const chosen = list || ["Bite","Dash"];
+  pet.AbilitySlots = {};
+  for(const id of chosen){
+    const defn = REGISTRY[id];
+    if(defn){ pet.AbilitySlots[id] = { id, cd:defn.cd, cast:(ctx)=>defn.cast(ctx) }; }
+  }
+  return pet.AbilitySlots;
+};
+// closestEnemy adapted for 2D
+function closestEnemy(ofEnt, radius=120, pool){
+  let best=null, bestD=radius;
+  const candidates = pool || ENTITIES;
+  for(const other of candidates){
+    if (other!==ofEnt && other.alive && other.team!==ofEnt.team){
+      const d = Vec2.sub(other.pos, ofEnt.pos).len();
+      if (d < bestD){ best=other; bestD=d; }
+    }
+  }
+  return best;
+}
+// approachAndDo without Roblox task/os/cframe
+function approachAndDo(pet, tgt, range=24, maxTime=1.2, fn){
+  const startT = performance.now()/1000;
+  function step(){
+    const now=performance.now()/1000;
+    if(now - startT > maxTime) return fn();
+    if(!tgt || !tgt.alive) return;
+    const d = Vec2.sub(tgt.pos, pet.pos); const L=d.len();
+    if(L <= range){ fn(); return; }
+    pet.vel.add(d.unit().mul(200)); // accelerate toward
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+function beginCD(caster, id, seconds){
+  caster.setCd(id, seconds, performance.now()/1000);
+}
+// Toast
+function toastAt(obj, text){
+  log(text);
+}
+// Definitions
+def({
+  id:"Bite", key:"Key1", label:"Bite", cd:0.6,
+  cast(ctx){
+    const c=ctx.caster; let tgt=ctx.target || closestEnemy(c, 160);
+    if(!tgt) { log("[Bite] no target"); return; }
+    approachAndDo(c, tgt, 26, 0.6, ()=>{
+      const dmg = computeDamage("Bite", "slice", c, tgt);
+      tgt.damage(dmg);
+      beginCD(c, "Bite", 0.6);
+      toastAt(tgt, `BITE ${dmg}`);
+    });
+  }
+});
+def({
+  id:"Dash", key:"Key2", label:"Dash", cd:3.0,
+  cast(ctx){
+    const c=ctx.caster; const tgt=ctx.target||closestEnemy(c, 9999)||c;
+    const dir = Vec2.sub(tgt.pos, c.pos).unit();
+    c.vel.add(dir.mul(420));
+    beginCD(c, "Dash", 3.0);
+    toastAt(c, "DASH");
+  }
+});
+def({
+  id:"Stomp", key:"Key3", label:"Stomp", cd:5.0,
+  cast(ctx){
+    const c=ctx.caster; const center = ctx.point || c.pos.clone().add(Vec2.sub( (ctx.target?.pos||c.pos), c.pos ).unit().mul(30));
+    const r=40;
+    for(const o of ENTITIES){
+      if(o!==c && o.team!==c.team && o.alive){
+        if (Vec2.sub(o.pos, center).len() <= r){
+          const dmg = 10;
+          o.damage(dmg);
+        }
+      }
+    }
+    beginCD(c, "Stomp", 5.0);
+    toastAt(c, "STOMP");
+  }
+});
+def({
+  id:"Bolt", key:"Key4", label:"Bolt", cd:1.2,
+  cast(ctx){
+    const c=ctx.caster; const tgt=ctx.target || closestEnemy(c, 240);
+    if(!tgt) return;
+    const dmg = computeDamage("Bite", "zap", c, tgt); // reuse Bite atk values but zap type
+    tgt.damage(dmg);
+    beginCD(c, "Bolt", 1.2);
+    toastAt(tgt, `BOLT ${dmg}`);
+  }
+});
+// ===== Worldgen sketch so your BiomeNoise/Heightfield calls compile
+const Params = { CELL:20, WATER_BASE:8, SEED:1335 };
+const SHAPE={ Taiga:{amp:142,freq:0.018,rough:0.55,base:2,water:0},
+              Meadow:{amp:118,freq:0.006,rough:0.30,base:0,water:0},
+              Beach:{amp:106,freq:0.010,rough:0.25,base:-3,water:-1},
+              Swamp:{amp:108,freq:0.004,rough:0.25,base:-1,water:2} };
+const cacheW = new Map();
+function weightsAtCell(ix,iz,seed){
+  const k=ix+"|"+iz; if(cacheW.has(k)) return cacheW.get(k);
+  const x=(ix+0.5)*Params.CELL, z=(iz+0.5)*Params.CELL;
+  const T=clamp(0.5+0.5*noise2(x*0.00035, z*0.00035 + seed*0.11),0,1);
+  const W=clamp(0.5+0.5*noise2(x*0.00070, z*0.00070 + seed*0.37),0,1);
+  const wTaiga=(1-T)*(1-W), wMeadow=T*(1-W), wSwamp=(1-T)*W*0.7 + T*W*0.3;
+  const coast=0.5+0.5*noise2(x*0.00090, z*0.00090 + seed*0.59);
+  const near=clamp(1 - Math.abs(coast-0.5)*8, 0, 1);
+  const wBeach=near*0.9;
+  const s=wTaiga+wMeadow+wSwamp+wBeach;
+  const out = s<1e-6 ? {Meadow:1} : {Taiga:wTaiga/s, Meadow:wMeadow/s, Swamp:wSwamp/s, Beach:wBeach/s};
+  cacheW.set(k,out); return out;
+}
+function addScaled(out,t,s){ for(const [k,v] of Object.entries(t)) out[k]=(out[k]||0)+v*s; }
+const BiomeNoise = {
+  biomeMix(x,z,seed=Params.SEED){
+    const gx=Math.floor(x/Params.CELL), gz=Math.floor(z/Params.CELL);
+    const fx=x/Params.CELL-gx, fz=z/Params.CELL-gz;
+    const w00=weightsAtCell(gx, gz, seed);
+    const w10=weightsAtCell(gx+1,gz,seed);
+    const w01=weightsAtCell(gx,gz+1,seed);
+    const w11=weightsAtCell(gx+1,gz+1,seed);
+    const out={}; addScaled(out,w00,(1-fx)*(1-fz)); addScaled(out,w10,fx*(1-fz));
+    addScaled(out,w01,(1-fx)*fz); addScaled(out,w11,fx*fz);
+    let s=0; for(const v of Object.values(out)) s+=v; if(s>1e-6) for(const k in out) out[k]/=s; return out;
+  }
+};
+function fbm(x,z,seed,f,rough){
+  let sum=0, amp=1; rough=clamp(rough,0.15,0.95);
+  for(let i=1;i<=3;i++){ sum += noise2(x*f, z*f + (seed||0)*i*0.137) * amp; f*=2; amp*=rough; }
+  return sum;
+}
+const Heightfield = {
+  sample(x,z,seed){
+    const w = BiomeNoise.biomeMix(x,z,seed);
+    let amp=0,freq=0,rough=0,base=0,water=0;
+    for(const [name,wt] of Object.entries(w)){
+      const p=SHAPE[name]; if(!p) continue;
+      amp+=wt*p.amp; freq+=wt*p.freq; rough+=wt*p.rough; base+=wt*p.base; water+=wt*p.water;
+    }
+    const n=fbm(x,z,seed,freq,rough);
+    const nh = clamp(0.5+0.5*n,0,1);
+    const yG = base + amp*nh;
+    const yW = Params.WATER_BASE + water;
+    return { yG, yW, weights:w };
+  }
+};
+// ===== Canvas loop and simple scene =====
+const canvas=document.getElementById("game");
+const g=canvas.getContext("2d");
+const hud=document.getElementById("hud");
+const logEl=document.getElementById("log");
+function log(s){ logEl.textContent = `[${(performance.now()/1000).toFixed(2)}] ${s}\n` + logEl.textContent; }
+let W=innerWidth, H=innerHeight;
+function resize(){ W=innerWidth; H=innerHeight; canvas.width=W; canvas.height=H; }
+addEventListener("resize", resize, {passive:true}); resize();
+
+const ENTITIES = [ new Entity({x:W*0.3,y:H*0.5,team:"A"}),
+                   new Entity({x:W*0.7,y:H*0.5,team:"B"}) ];
+const A = ENTITIES[0], B = ENTITIES[1];
+Abilities.GiveDefaults(A, ["Bite","Dash","Stomp","Bolt"]);
+
+let target=B, cursor=new Vec2(W*0.5,H*0.5);
+canvas.addEventListener("pointerdown", (e)=>{
+  const r=canvas.getBoundingClientRect(); cursor=new Vec2(e.clientX-r.left, e.clientY-r.top);
+  // pick nearest entity
+  let best=null, bestD=1e9;
+  for(const o of ENTITIES){ const d=Vec2.sub(o.pos, cursor).len(); if(d<bestD && d<34){ best=o; bestD=d; } }
+  if(best) target=best;
+});
+
+function doCast(name){
+  const a = Abilities.Get(name); if(!a) return;
+  const now=performance.now()/1000;
+  if(!A.cdReady(name, now)){ log(`${name}: on cooldown`); return; }
+  a.cast({ caster:A, target });
+  A.setCd(name, a.cd, now);
+}
+document.getElementById("btnBite").onclick = ()=> doCast("Bite");
+document.getElementById("btnDash").onclick = ()=> doCast("Dash");
+document.getElementById("btnStomp").onclick = ()=> doCast("Stomp");
+document.getElementById("btnBolt").onclick = ()=> doCast("Bolt");
+addEventListener("keydown", e=>{
+  if(e.code==="Digit1") doCast("Bite");
+  if(e.code==="Digit2") doCast("Dash");
+  if(e.code==="Digit3") doCast("Stomp");
+  if(e.code==="Digit4") doCast("Bolt");
+});
+
+let last=performance.now()/1000;
+function frame(){
+  const now=performance.now()/1000, dt=Math.min(0.05, now-last); last=now;
+  // AI: B moves to A, bites if close
+  if(B.alive){
+    const d=Vec2.sub(A.pos,B.pos); const L=d.len();
+    if(L>80) B.vel.add(d.unit().mul(80));
+    if(L<28){ const dmg=computeDamage("Bite","slice",B,A); A.damage(dmg); }
+  }
+  for(const e of ENTITIES) e.update(dt);
+  g.clearRect(0,0,W,H); g.fillStyle="#141a27"; g.fillRect(0,0,W,H);
+  for(const e of ENTITIES) e.draw(g);
+  hud.textContent = `A ${A.hp}/${A.stats.maxHP} | B ${B.hp}/${B.stats.maxHP}`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</html>

@@ -1,0 +1,301 @@
+
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Player + WorldGen Sandbox (Canvas)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#0b0e14;color:#eaeefb;font-family:system-ui}
+  #overlay{position:fixed;left:0;top:0;padding:.5rem .75rem;background:#1118;font-size:12px;white-space:pre}
+  #help{position:fixed;right:0;top:0;padding:.5rem .75rem;background:#1118;font-size:12px;text-align:right}
+  #ui{position:fixed;inset:auto 0 0 0;display:flex;gap:.5rem;padding:.5rem .75rem;background:#1117}
+  button{border:0;border-radius:.5rem;padding:.5rem .8rem;background:#2a3245;color:#eaeefb;cursor:pointer}
+  #game{display:block;width:100vw;height:100vh;touch-action:none}
+</style>
+<canvas id="game"></canvas>
+<pre id="overlay"></pre>
+<pre id="help">WASD move • QE zoom • Click to set waypoint
+Biomes: Meadow/Taiga/Swamp/Beach mix • Water level shown
+</pre>
+<div id="ui">
+  <button id="center">Center on player</button>
+  <button id="regen">Reseed world</button>
+  <span style="margin-left:auto" id="hud"></span>
+</div>
+<script>
+// ===== Math, RNG, noise =====
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+class RNG{constructor(seed=123456789){this.s=(seed>>>0)||1;}next(){this.s=(1664525*this.s+1013904223)>>>0;return this.s;}float(){return (this.next()&0xffff)/0x10000;}int(a,b){return a + (this.next()%(b-a+1));}}
+// 2D simplex noise
+const F2=0.5*(Math.sqrt(3)-1), G2=(3-Math.sqrt(3))/6;
+const grad3=[[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+let perm; function reseedNoise(seed=0){ const r=new RNG(seed||1); const p256=new Uint8Array(256); for(let i=0;i<256;i++) p256[i]=i; for(let i=255;i>0;i--){ const j=r.int(0,255); const t=p256[i]; p256[i]=p256[j]; p256[j]=t; } perm=new Uint8Array(512); for(let i=0;i<512;i++) perm[i]=p256[i&255]; } reseedNoise(1234);
+function dot2(g,x,y){ return g[0]*x+g[1]*y; }
+function noise2(xin,yin){
+  let n0=0,n1=0,n2=0;
+  const s=(xin+yin)*F2;
+  const i=Math.floor(xin+s), j=Math.floor(yin+s);
+  const t=(i+j)*G2, X0=i-t, Y0=j-t;
+  const x0=xin-X0, y0=yin-Y0;
+  let i1,j1; if(x0>y0){ i1=1;j1=0; } else { i1=0;j1=1; }
+  const x1=x0-i1+G2, y1=y0-j1+G2;
+  const x2=x0-1+2*G2, y2=y0-1+2*G2;
+  const ii=i&255, jj=j&255;
+  const gi0=perm[ii+perm[jj]]%8;
+  const gi1=perm[ii+i1+perm[jj+j1]]%8;
+  const gi2=perm[ii+1+perm[jj+1]]%8;
+  let t0=0.5-x0*x0-y0*y0; if(t0>0){ t0*=t0; n0=t0*t0*dot2(grad3[gi0],x0,y0); }
+  let t1=0.5-x1*x1-y1*y1; if(t1>0){ t1*=t1; n1=t1*t1*dot2(grad3[gi1],x1,y1); }
+  let t2=0.5-x2*x2-y2*y2; if(t2>0){ t2*=t2; n2=t2*t2*dot2(grad3[gi2],x2,y2); }
+  return 70*(n0+n1+n2);
+}
+
+// ===== World params and biome/heightfield =====
+const Params = { CELL:20, WATER_BASE:8, SEED:1335 };
+const SHAPE = {
+  Taiga:{ amp:142, freq:0.018, rough:0.55, base: 2, water: 0 },
+  Meadow:{amp:118, freq:0.006, rough:0.30, base: 0, water: 0 },
+  Beach:{ amp:106, freq:0.010, rough:0.25, base:-3, water:-1},
+  Swamp:{ amp:108, freq:0.004, rough:0.25, base:-1, water: 2 },
+};
+function weightsAtCell(ix,iz,seed){
+  const x=(ix+0.5)*Params.CELL, z=(iz+0.5)*Params.CELL;
+  const T = clamp(0.5 + 0.5*noise2(x*0.00035, z*0.00035 + seed*0.11), 0, 1);
+  const W = clamp(0.5 + 0.5*noise2(x*0.00070, z*0.00070 + seed*0.37), 0, 1);
+  const wTaiga  = (1-T)*(1-W);
+  const wMeadow = T*(1-W);
+  const wSwamp  = (1-T)*W*0.7 + T*W*0.3;
+  const coast   = 0.5 + 0.5*noise2(x*0.00090, z*0.00090 + seed*0.59);
+  const near    = clamp(1 - Math.abs(coast - 0.5)*8, 0, 1);
+  const wBeach  = near*0.9;
+  const s = wTaiga+wMeadow+wSwamp+wBeach || 1;
+  return { Taiga:wTaiga/s, Meadow:wMeadow/s, Swamp:wSwamp/s, Beach:wBeach/s };
+}
+function biomeMix(x,z,seed){
+  const gx=Math.floor(x/Params.CELL), gz=Math.floor(z/Params.CELL);
+  const fx=x/Params.CELL-gx, fz=z/Params.CELL-gz;
+  const w00=weightsAtCell(gx,gz,seed), w10=weightsAtCell(gx+1,gz,seed);
+  const w01=weightsAtCell(gx,gz+1,seed), w11=weightsAtCell(gx+1,gz+1,seed);
+  const out={}; const add=(t,s)=>{ for(const k in t){ out[k]=(out[k]||0)+t[k]*s; } };
+  add(w00,(1-fx)*(1-fz)); add(w10,fx*(1-fz)); add(w01,(1-fx)*fz); add(w11,fx*fz);
+  let s=0; for(const v of Object.values(out)) s+=v; for(const k in out) out[k]/=s||1;
+  return out;
+}
+function fbm(x,z,seed,f,rough){
+  let sum=0, amp=1; rough=clamp(rough,0.15,0.95);
+  for(let i=1;i<=3;i++){ sum += noise2(x*f, z*f + (seed||0)*i*0.137)*amp; f*=2; amp*=rough; }
+  return sum;
+}
+function heightSample(x,z,seed){
+  const w = biomeMix(x,z,seed);
+  let amp=0,freq=0,rough=0,base=0,water=0;
+  for(const [name,wt] of Object.entries(w)){
+    const p=SHAPE[name]; if(!p) continue;
+    amp += wt*p.amp; freq += wt*p.freq; rough += wt*p.rough; base += wt*p.base; water += wt*p.water;
+  }
+  const n   = fbm(x,z,seed,freq,rough);
+  const nh  = clamp(0.5 + 0.5*n, 0, 1);
+  const yG  = base + amp*nh;
+  const yW  = Params.WATER_BASE + water;
+  return { yG, yW, weights:w };
+}
+
+// ===== Chunk system (tile pre-render) =====
+const TILE = 16;              // pixels per cell
+const CELLS_PER_CHUNK = 32;   // 32x32 cells per chunk
+const CHUNK_PX = TILE * CELLS_PER_CHUNK;
+
+class Chunk{
+  constructor(cx,cz,seed){
+    this.cx=cx; this.cz=cz; this.seed=seed;
+    this.canvas=document.createElement('canvas');
+    this.canvas.width=CHUNK_PX; this.canvas.height=CHUNK_PX;
+    this.g=this.canvas.getContext('2d');
+    this.draw();
+  }
+  draw(){
+    const g=this.g;
+    for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
+      for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
+        const wx = (this.cx*CELLS_PER_CHUNK + ix) * Params.CELL;
+        const wz = (this.cz*CELLS_PER_CHUNK + iz) * Params.CELL;
+        const h = heightSample(wx, wz, this.seed);
+        const w = h.weights;
+        const biomeColor = blend([
+          [w.Meadow||0, [86,140, 80]],
+          [w.Taiga ||0, [210,216,220]],
+          [w.Swamp ||0, [ 60, 70, 50]],
+          [w.Beach ||0, [220,205,150]],
+        ]);
+        // Water tint
+        const isWater = h.yG < h.yW;
+        const col = isWater ? mix(biomeColor,[70,110,180],0.55) : biomeColor;
+        g.fillStyle = rgb(col);
+        g.fillRect(ix*TILE, iz*TILE, TILE, TILE);
+        // contour lines
+        const c = (Math.floor(h.yG/6)%2===0)? 10:0;
+        if(!isWater && c){
+          g.fillStyle = 'rgba(0,0,0,0.06)';
+          g.fillRect(ix*TILE, iz*TILE, TILE, 1);
+        }
+      }
+    }
+  }
+}
+const CHUNKS=new Map();
+function key(cx,cz){ return cx+'|'+cz; }
+function getChunk(cx,cz,seed){
+  const k=key(cx,cz);
+  let c=CHUNKS.get(k);
+  if(!c || c.seed!==seed){ c=new Chunk(cx,cz,seed); CHUNKS.set(k,c); }
+  return c;
+}
+function blend(entries){ // entries: [[w,[r,g,b]],...]
+  let r=0,g=0,b=0,s=0; for(const [w,[R,G,B]] of entries){ r+=w*R; g+=w*G; b+=w*B; s+=w; }
+  if(s>0){ r/=s; g/=s; b/=s; } return [r|0,g|0,b|0];
+}
+function mix(a,b,t){ return [(a[0]*(1-t)+b[0]*t)|0,(a[1]*(1-t)+b[1]*t)|0,(a[2]*(1-t)+b[2]*t)|0]; }
+function rgb([r,g,b]){ return `rgb(${r},${g},${b})`; }
+
+// ===== Player and camera =====
+class Player{
+  constructor(x=0,z=0){
+    this.x=x; this.z=z;
+    this.vx=0; this.vz=0;
+    this.speed=120; // world units per second
+    this.radius=8;
+    this.hp=100;
+    this.wp=null; // waypoint
+  }
+  update(dt){
+    // move toward waypoint if set
+    if(this.wp){
+      const dx=this.wp.x - this.x, dz=this.wp.z - this.z;
+      const L=Math.hypot(dx,dz);
+      if(L>1){ this.vx += (dx/L)*this.speed*0.8; this.vz += (dz/L)*this.speed*0.8; }
+      if(L<6) this.wp=null;
+    }
+    // integrate
+    this.x += this.vx*dt; this.z += this.vz*dt;
+    // damping
+    this.vx*=0.86; this.vz*=0.86;
+  }
+}
+
+// ===== Canvas, input, main loop =====
+const canvas = document.getElementById('game');
+const g = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+const overlay = document.getElementById('overlay');
+let W=innerWidth, H=innerHeight;
+function resize(){ W=innerWidth; H=innerHeight; canvas.width=W; canvas.height=H; }
+addEventListener('resize', resize, {passive:true}); resize();
+
+let seed = 1335, rng = new RNG(seed);
+let player = new Player(0,0);
+let cam = { x:0, z:0, zoom:1.0 }; // zoom scales pixels/world
+
+const keys=new Set();
+addEventListener('keydown', e=>{ keys.add(e.code); if(["KeyQ","KeyE"].includes(e.code)) e.preventDefault(); });
+addEventListener('keyup', e=>{ keys.delete(e.code); });
+canvas.addEventListener('pointerdown', e=>{
+  const r=canvas.getBoundingClientRect();
+  const wx = cam.x + (e.clientX - r.left - W/2)/(cam.zoom) * Params.CELL;
+  const wz = cam.z + (e.clientY - r.top  - H/2)/(cam.zoom) * Params.CELL;
+  player.wp = { x:wx, z:wz };
+});
+document.getElementById('center').onclick = ()=>{ cam.x=player.x; cam.z=player.z; };
+document.getElementById('regen').onclick = ()=>{
+  seed = (seed*1664525 + 1013904223)>>>0;
+  reseedNoise(seed&0xffff);
+  CHUNKS.clear();
+};
+addEventListener('wheel', e=>{
+  cam.zoom = clamp(cam.zoom * (e.deltaY<0? 1.1: 0.9), 0.5, 3.0);
+}, {passive:true});
+
+function stepInput(dt){
+  let ax=0, az=0;
+  if(keys.has('KeyW')) az -= 1;
+  if(keys.has('KeyS')) az += 1;
+  if(keys.has('KeyA')) ax -= 1;
+  if(keys.has('KeyD')) ax += 1;
+  if(ax||az){
+    const L=Math.hypot(ax,az)||1; ax/=L; az/=L;
+    const sp = player.speed * (keys.has('ShiftLeft')? 1.8:1.0);
+    player.vx += ax*sp; player.vz += az*sp;
+  }
+  if(keys.has('KeyQ')) cam.zoom = clamp(cam.zoom*0.98, 0.5, 3.0);
+  if(keys.has('KeyE')) cam.zoom = clamp(cam.zoom*1.02, 0.5, 3.0);
+}
+
+// ===== Render world and player =====
+function render(){
+  // follow camera
+  cam.x += (player.x - cam.x)*0.12;
+  cam.z += (player.z - cam.z)*0.12;
+
+  const scale = cam.zoom / Params.CELL; // pixels per world unit
+  const screenToWorld = (sx,sz)=>({ x: cam.x + sx/scale, z: cam.z + sz/scale });
+
+  // visible chunk range
+  const halfW = W/2/scale, halfH = H/2/scale;
+  const minX = cam.x - halfW, maxX = cam.x + halfW;
+  const minZ = cam.z - halfH, maxZ = cam.z + halfH;
+  const cellMinX = Math.floor(minX/Params.CELL), cellMaxX = Math.floor(maxX/Params.CELL);
+  const cellMinZ = Math.floor(minZ/Params.CELL), cellMaxZ = Math.floor(maxZ/Params.CELL);
+  const cMinX = Math.floor(cellMinX/CELLS_PER_CHUNK);
+  const cMaxX = Math.floor(cellMaxX/CELLS_PER_CHUNK);
+  const cMinZ = Math.floor(cellMinZ/CELLS_PER_CHUNK);
+  const cMaxZ = Math.floor(cellMaxZ/CELLS_PER_CHUNK);
+
+  g.clearRect(0,0,W,H);
+  // draw chunks
+  for(let cz=cMinZ; cz<=cMaxZ; cz++){
+    for(let cx=cMinX; cx<=cMaxX; cx++){
+      const chunk = getChunk(cx,cz,seed);
+      const worldX = cx*CELLS_PER_CHUNK*Params.CELL;
+      const worldZ = cz*CELLS_PER_CHUNK*Params.CELL;
+      const sx = Math.floor((worldX - (cam.x - halfW))*scale);
+      const sz = Math.floor((worldZ - (cam.z - halfH))*scale);
+      const sw = Math.ceil(CHUNK_PX * scale / TILE) * TILE; // preserve pixel grid
+      const sh = Math.ceil(CHUNK_PX * scale / TILE) * TILE;
+      g.imageSmoothingEnabled=false;
+      g.drawImage(chunk.canvas, sx, sz, CHUNK_PX*scale, CHUNK_PX*scale);
+    }
+  }
+
+  // draw player
+  const psx = Math.floor((player.x - (cam.x - halfW))*scale);
+  const psz = Math.floor((player.z - (cam.z - halfH))*scale);
+  g.beginPath(); g.arc(psx, psz, Math.max(3, 6*cam.zoom), 0, Math.PI*2); g.fillStyle="#7ce"; g.fill();
+  g.strokeStyle="#0008"; g.stroke();
+
+  // waypoint
+  if(player.wp){
+    const wsx = Math.floor((player.wp.x - (cam.x - halfW))*scale);
+    const wsz = Math.floor((player.wp.z - (cam.z - halfH))*scale);
+    g.beginPath(); g.arc(wsx, wsz, Math.max(4, 5*cam.zoom), 0, Math.PI*2); g.strokeStyle="#fff8"; g.stroke();
+  }
+
+  // HUD
+  const h = heightSample(player.x, player.z, seed);
+  const biome = dominant(h.weights);
+  overlay.textContent = `x:${player.x.toFixed(1)} z:${player.z.toFixed(1)}  zoom:${cam.zoom.toFixed(2)}
+ground:${h.yG.toFixed(1)}  water:${h.yW.toFixed(1)}  biome:${biome}`;
+  hud.textContent = `HP ${player.hp}`;
+}
+function dominant(w){ let best="Meadow", bw=-1; for(const [k,v] of Object.entries(w)){ if(v>bw){ bw=v; best=k; } } return best; }
+
+// ===== Main loop =====
+let last=performance.now()/1000;
+function frame(){
+  const now=performance.now()/1000, dt=Math.min(0.05, now-last); last=now;
+  stepInput(dt);
+  player.update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</html>
