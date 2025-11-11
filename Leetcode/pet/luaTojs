@@ -1,743 +1,676 @@
-const Abilities = {};
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+class RNG{constructor(seed=123456789){this.s=(seed>>>0)||1;}next(){this.s=(1664525*this.s+1013904223)>>>0;return this.s;}float(){return (this.next()&0xffff)/0x10000;}int(a,b){return a + (this.next()%(b-a+1));}}
+// 2D simplex noise
+const F2=0.5*(Math.sqrt(3)-1), G2=(3-Math.sqrt(3))/6;
+const grad3=[[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+let perm; function reseedNoise(seed=0){ const r=new RNG(seed||1); const p256=new Uint8Array(256); for(let i=0;i<256;i++) p256[i]=i; for(let i=255;i>0;i--){ const j=r.int(0,255); const t=p256[i]; p256[i]=p256[j]; p256[j]=t; } perm=new Uint8Array(512); for(let i=0;i<512;i++) perm[i]=p256[i&255]; } reseedNoise(1234);
+function dot2(g,x,y){ return g[0]*x+g[1]*y; }
+function noise2(xin,yin){
+  let n0=0,n1=0,n2=0;
+  const s=(xin+yin)*F2;
+  const i=Math.floor(xin+s), j=Math.floor(yin+s);
+  const t=(i+j)*G2, X0=i-t, Y0=j-t;
+  const x0=xin-X0, y0=yin-Y0;
+  let i1,j1; if(x0>y0){ i1=1;j1=0; } else { i1=0;j1=1; }
+  const x1=x0-i1+G2, y1=y0-j1+G2;
+  const x2=x0-1+2*G2, y2=y0-1+2*G2;
+  const ii=i&255, jj=j&255;
+  const gi0=perm[ii+perm[jj]]%8;
+  const gi1=perm[ii+i1+perm[jj+j1]]%8;
+  const gi2=perm[ii+1+perm[jj+1]]%8;
+  let t0=0.5-x0*x0-y0*y0; if(t0>0){ t0*=t0; n0=t0*t0*dot2(grad3[gi0],x0,y0); }
+  let t1=0.5-x1*x1-y1*y1; if(t1>0){ t1*=t1; n1=t1*t1*dot2(grad3[gi1],x1,y1); }
+  let t2=0.5-x2*x2-y2*y2; if(t2>0){ t2*=t2; n2=t2*t2*dot2(grad3[gi2],x2,y2); }
+  return 70*(n0+n1+n2);
+}
 
-function toastAt(part, text, color) {
-    if (part) {
-        AbilityToast.FireAllClients({ part, text, color });
+// ===== World params and biome/heightfield =====
+const Params = { CELL:20, WATER_BASE:8, SEED:1335 };
+const SHAPE = {
+  Taiga:{ amp:142, freq:0.018, rough:0.55, base: 2, water: 0 },
+  Meadow:{amp:118, freq:0.006, rough:0.30, base: 0, water: 0 },
+  Beach:{ amp:106, freq:0.010, rough:0.25, base:-3, water:-1},
+  Swamp:{ amp:108, freq:0.004, rough:0.25, base:-1, water: 2 },
+};
+const BiomeNoise = {
+  biomeMix(x, z, seed) {
+    const gx = Math.floor(x / Params.CELL);
+    const gz = Math.floor(z / Params.CELL);
+    const fx = x / Params.CELL - gx;
+    const fz = z / Params.CELL - gz;
+
+    const w00 = weightsAtCell(gx, gz, seed);
+    const w10 = weightsAtCell(gx + 1, gz, seed);
+    const w01 = weightsAtCell(gx, gz + 1, seed);
+    const w11 = weightsAtCell(gx + 1, gz + 1, seed);
+
+    const out = {};
+    addScaled(out, w00, (1 - fx) * (1 - fz));
+    addScaled(out, w10, fx * (1 - fz));
+    addScaled(out, w01, (1 - fx) * fz);
+    addScaled(out, w11, fx * fz);
+
+    let s = 0;
+    for (const v of Object.values(out)) s += v;
+    if (s > 1e-6) {
+      for (const k in out) {
+        out[k] /= s;
+      }
     }
-}
+    return out;
+  },
+};
 
-function clamp(v, a, b) {
-    return Math.max(a, Math.min(b, v));
-}
+const Heightfield = {
+  sample(x, z, seed) {
+    const w = BiomeNoise.biomeMix(x, z, seed);
+    let amp = 0, freq = 0, rough = 0, base = 0, water = 0;
 
-function closestEnemy(ofPet, radius = 40, pool) {
-    let best = null;
-    let bestD = radius;
-    const op = ofPet.HRP.Position;
-
-    const candidates = pool || (_G.AllCreatures || []);
-    for (const other of candidates) {
-        if (other !== ofPet && other.State !== "Dead" && other.Team !== ofPet.Team) {
-            const d = (other.HRP.Position.sub(op)).Magnitude;
-            if (d < bestD) {
-                best = other;
-                bestD = d;
-            }
-        }
+    for (const [name, wt] of Object.entries(w)) {
+      const p = SHAPE[name];
+      if (p) {
+        amp += wt * p.amp;
+        freq += wt * p.freq;
+        rough += wt * p.rough;
+        base += wt * p.base;
+        water += wt * p.water;
+      }
     }
-    return best;
+
+    const n = fbm(x, z, seed, freq, rough);
+    const nh = clamp(0.5 + 0.5 * n, 0, 1);
+    const yG = base + amp * nh;
+    const yW = Params.WATER_BASE + water;
+
+    return { yG, yW, weights: w };
+  },
+};
+function weightsAtCell(ix,iz,seed){
+  const x=(ix+0.5)*Params.CELL, z=(iz+0.5)*Params.CELL;
+  const T = clamp(0.5 + 0.5*noise2(x*0.00035, z*0.00035 + seed*0.11), 0, 1);
+  const W = clamp(0.5 + 0.5*noise2(x*0.00070, z*0.00070 + seed*0.37), 0, 1);
+  const wTaiga  = (1-T)*(1-W);
+  const wMeadow = T*(1-W);
+  const wSwamp  = (1-T)*W*0.7 + T*W*0.3;
+  const coast   = 0.5 + 0.5*noise2(x*0.00090, z*0.00090 + seed*0.59);
+  const near    = clamp(1 - Math.abs(coast - 0.5)*8, 0, 1);
+  const wBeach  = near*0.9;
+  const s = wTaiga+wMeadow+wSwamp+wBeach || 1;
+  return { Taiga:wTaiga/s, Meadow:wMeadow/s, Swamp:wSwamp/s, Beach:wBeach/s };
+}
+function biomeMix(x,z,seed){
+  const gx=Math.floor(x/Params.CELL), gz=Math.floor(z/Params.CELL);
+  const fx=x/Params.CELL-gx, fz=z/Params.CELL-gz;
+  const w00=weightsAtCell(gx,gz,seed), w10=weightsAtCell(gx+1,gz,seed);
+  const w01=weightsAtCell(gx,gz+1,seed), w11=weightsAtCell(gx+1,gz+1,seed);
+  const out={}; const add=(t,s)=>{ for(const k in t){ out[k]=(out[k]||0)+t[k]*s; } };
+  add(w00,(1-fx)*(1-fz)); add(w10,fx*(1-fz)); add(w01,(1-fx)*fz); add(w11,fx*fz);
+  let s=0; for(const v of Object.values(out)) s+=v; for(const k in out) out[k]/=s||1;
+  return out;
+}
+function blend(components){
+  const out=[0,0,0]; let total=0;
+    for(const [wt,col] of components){
+        out[0]+=col[0]*wt; out[1]+=col[1]*wt; out[2]+=col[2]*wt; total+=wt;
+    }
+    if(total>0){
+        out[0]/=total; out[1]/=total; out[2]/=total;
+    }
+    return out;
+}
+function rgb(col){ return `rgb(${col[0]|0},${col[1]|0},${col[2]|0})`; }
+function mix(c1,c2,t){
+  const it=1-t;
+    return [
+        c1[0]*it + c2[0]*t,
+        c1[1]*it + c2[1]*t,
+        c1[2]*it + c2[2]*t,
+    ];
+}
+function fbm(x,z,seed,f,rough){
+  let sum=0, amp=1; rough=clamp(rough,0.15,0.95);
+  for(let i=1;i<=3;i++){ sum += noise2(x*f, z*f + (seed||0)*i*0.137)*amp; f*=2; amp*=rough; }
+  return sum;
+}
+function heightSample(x,z,seed){
+  const w = biomeMix(x,z,seed);
+  let amp=0,freq=0,rough=0,base=0,water=0;
+  for(const [name,wt] of Object.entries(w)){
+    const p=SHAPE[name]; if(!p) continue;
+    amp += wt*p.amp; freq += wt*p.freq; rough += wt*p.rough; base += wt*p.base; water += wt*p.water;
+  }
+  const n   = fbm(x,z,seed,freq,rough);
+  const nh  = clamp(0.5 + 0.5*n, 0, 1);
+  const yG  = base + amp*nh;
+  const yW  = Params.WATER_BASE + water;
+  return { yG, yW, weights:w };
 }
 
-function approachAndDo(pet, tgt, range = 6, maxTime = 3.0, fn) {
-    const my = (pet._actionId || 0) + 1;
-    pet._actionId = my;
-    pet.State = "Manual";
+// ===== Chunk system (tile pre-render) =====
+const TILE = 16;              // pixels per cell
+const CELLS_PER_CHUNK = 32;   // 32x32 cells per chunk
+const CHUNK_PX = TILE * CELLS_PER_CHUNK;
 
-    task.spawn(() => {
-        const t0 = os.clock();
-        while (os.clock() - t0 < maxTime) {
-            if (pet._actionId !== my) return;
-            if (!tgt || tgt.State === "Dead" || !tgt.Model.Parent) break;
+class ChunkData {
+  constructor(cx, cz, seed) {
+    this.cx = cx;
+    this.cz = cz;
+    this.seed = seed;
+    this.heightmap = [];
+    this.biomeWeights = [];
+    this.flora = [];
 
-            const d = (tgt.HRP.Position.sub(pet.HRP.Position)).Magnitude;
-            if (d <= range) break;
+    this.generateData();
+  }
 
-            pet.Hum.MoveTo(tgt.HRP.Position);
-            for (let i = 0; i < 6; i++) {
-                if (pet._actionId !== my) return;
-                task.wait(0.05);
+  generateData() {
+    for (let iz = 0; iz < CELLS_PER_CHUNK; iz++) {
+      this.heightmap[iz] = [];
+      this.biomeWeights[iz] = [];
+      for (let ix = 0; ix < CELLS_PER_CHUNK; ix++) {
+        const wx = (this.cx * CELLS_PER_CHUNK + ix) * Params.CELL;
+        const wz = (this.cz * CELLS_PER_CHUNK + iz) * Params.CELL;
+
+        const h = heightSample(wx, wz, this.seed);
+        this.heightmap[iz][ix] = h;
+        this.biomeWeights[iz][ix] = h.weights;
+
+        if (h.yG >= h.yW) {
+          const dominantBiome = dominant(h.weights);
+          const floraOptions = FloraManager.prototype.biomeFloraPicker(dominantBiome);
+          if (floraOptions.length > 0) {
+            const rng = new RNG((wx * 73856093) ^ (wz * 19349663) ^ this.seed);
+            const spawnChance = 0.1; // 10% chance to spawn flora
+            if (rng.float() < spawnChance) {
+              const floraType = floraOptions[rng.int(0, floraOptions.length - 1)];
+              this.flora.push({ type: floraType, x: wx, z: wz });
             }
+          }
         }
-        if (pet._actionId !== my) return;
-        if (tgt && tgt.State !== "Dead") {
-            pet.HRP.CFrame = CFrame.lookAt(pet.HRP.Position, tgt.HRP.Position);
-            fn();
-        }
-        if (pet._actionId === my) pet.State = "Idle";
-    });
+      }
+    }
+  }
 }
 
-function beginCD(caster, id, seconds) {
-    caster.SetCD(id, seconds);
-}
+class Chunk {
+  constructor(cx, cz, seed) {
+    this.cx = cx;
+    this.cz = cz;
+    this.seed = seed;
+    this.data = new ChunkData(cx, cz, seed);
 
-// ===== Ability registry: read-only defs =====
-const REGISTRY = {};
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = CHUNK_PX;
+    this.canvas.height = CHUNK_PX;
+    this.g = this.canvas.getContext('2d');
 
-function def(a) {
-    REGISTRY[a.id] = a;
-    return a;
-}
+    this.draw();
+  }
 
-// Bite
-def({
-    id: "Bite",
-    key: "Q",
-    label: "Bite",
-    cd: 0.6,
-    cast(ctx) {
-        const c = ctx.caster;
-        let tgt = ctx.target;
-        if (!(tgt && tgt.HRP && tgt.State !== "Dead" && tgt.Model.Parent)) {
-            tgt = closestEnemy(c, 40);
-            if (!tgt) {
-                console.log("[Bite] no target");
-                return;
-            }
+  draw() {
+    const g = this.g;
+    for (let iz = 0; iz < CELLS_PER_CHUNK; iz++) {
+      for (let ix = 0; ix < CELLS_PER_CHUNK; ix++) {
+        const h = this.data.heightmap[iz][ix];
+        const w = h.weights;
+
+        const biomeColor = blend([
+          [w.Meadow || 0, [86, 140, 80]],
+          [w.Taiga || 0, [210, 216, 220]],
+          [w.Swamp || 0, [60, 70, 50]],
+          [w.Beach || 0, [220, 205, 150]],
+        ]);
+
+        const isWater = h.yG < h.yW;
+        const col = isWater ? mix(biomeColor, [70, 110, 180], 0.55) : biomeColor;
+        g.fillStyle = rgb(col);
+        g.fillRect(ix * TILE, iz * TILE, TILE, TILE);
+
+        // Contour lines
+        const c = (Math.floor(h.yG / 6) % 2 === 0) ? 10 : 0;
+        if (!isWater && c) {
+          g.fillStyle = 'rgba(0,0,0,0.06)';
+          g.fillRect(ix * TILE, iz * TILE, TILE, 1);
         }
-        approachAndDo(c, tgt, 6, 3.0, () => {
-            tgt.Damage(c, { dtype: "slice", base: 8 });
-            beginCD(c, "Bite", 0.6);
-            toastAt(tgt.HRP, "BITE!", Color3.fromRGB(255, 210, 120));
-        });
-    },
-});
+      }
+    }
+  }
+}
 
-// Dash
-def({
-    id: "Dash",
-    key: "E",
-    label: "Dash",
-    cd: 3.0,
-    cast(ctx) {
-        const c = ctx.caster;
-        const look = c.HRP.CFrame.LookVector;
-        const bv = new Instance("BodyVelocity");
-        bv.MaxForce = new Vector3(1e6, 1e6, 1e6);
-        bv.Velocity = look.mul(60);
-        bv.Parent = c.HRP;
-        game.GetService("Debris").AddItem(bv, 0.2);
-        beginCD(c, "Dash", 3.0);
-        toastAt(c.HRP, "DASH!", Color3.fromRGB(180, 220, 255));
-    },
-});
+// Update ChunkManager to use the new ChunkData separation
+class ChunkManager {
+  constructor() {
+    this.chunks = new Map();
+  }
 
-// Stomp
-def({
-    id: "Stomp",
-    key: "R",
-    label: "Stomp",
-    cd: 5.0,
-    cast(ctx) {
-        const c = ctx.caster;
-        const center = ctx.point || c.HRP.Position.add(c.HRP.CFrame.LookVector.mul(6));
-        const r = 8;
-        for (const other of (_G.AllCreatures || [])) {
-            if (other !== c && other.Team !== c.Team && other.State !== "Dead" && other.HRP) {
-                if ((other.HRP.Position.sub(center)).Magnitude <= r) {
-                    other.Damage(c, { dtype: "heat", base: 10 });
+  key(cx, cz) {
+    return `${cx}|${cz}`;
+  }
+
+  getChunk(cx, cz, seed) {
+    const k = this.key(cx, cz);
+    let chunk = this.chunks.get(k);
+    if (!chunk || chunk.seed !== seed) {
+      chunk = new Chunk(cx, cz, seed);
+      this.chunks.set(k, chunk);
+    }
+    return chunk;
+  }
+
+  unloadChunks(minX, maxX, minZ, maxZ) {
+    for (const key of this.chunks.keys()) {
+      const [cx, cz] = key.split('|').map(Number);
+      if (cx < minX || cx > maxX || cz < minZ || cz > maxZ) {
+        this.chunks.delete(key);
+      }
+    }
+  }
+}
+
+class Renderer {
+  constructor(canvas, player, chunkManager) {
+    this.canvas = canvas;
+    this.g = canvas.getContext('2d');
+    this.player = player;
+    this.chunkManager = chunkManager;
+    this.cam = { x: 0, z: 0, zoom: 1.0 };
+    this.W = innerWidth;
+    this.H = innerHeight;
+    this.resize();
+    addEventListener('resize', () => this.resize(), { passive: true });
+  }
+
+  resize() {
+    this.W = innerWidth;
+    this.H = innerHeight;
+    this.canvas.width = this.W;
+    this.canvas.height = this.H;
+  }
+
+  render(seed) {
+    const { g, cam, W, H, chunkManager, player } = this;
+
+    cam.x += (player.x - cam.x) * 0.12;
+    cam.z += (player.z - cam.z) * 0.12;
+
+    const scale = cam.zoom / Params.CELL;
+    const halfW = W / 2 / scale, halfH = H / 2 / scale;
+    const minX = cam.x - halfW, maxX = cam.x + halfW;
+    const minZ = cam.z - halfH, maxZ = cam.z + halfH;
+    const cMinX = Math.floor(minX / Params.CELL / CELLS_PER_CHUNK);
+    const cMaxX = Math.floor(maxX / Params.CELL / CELLS_PER_CHUNK);
+    const cMinZ = Math.floor(minZ / Params.CELL / CELLS_PER_CHUNK);
+    const cMaxZ = Math.floor(maxZ / Params.CELL / CELLS_PER_CHUNK);
+
+    chunkManager.unloadChunks(cMinX - 1, cMaxX + 1, cMinZ - 1, cMaxZ + 1);
+
+    g.clearRect(0, 0, W, H);
+    for (let cz = cMinZ; cz <= cMaxZ; cz++) {
+      for (let cx = cMinX; cx <= cMaxX; cx++) {
+        const chunk = chunkManager.getChunk(cx, cz, seed);
+        const worldX = cx * CELLS_PER_CHUNK * Params.CELL;
+        const worldZ = cz * CELLS_PER_CHUNK * Params.CELL;
+        const sx = Math.floor((worldX - (cam.x - halfW)) * scale);
+        const sz = Math.floor((worldZ - (cam.z - halfH)) * scale);
+        g.imageSmoothingEnabled = false;
+        g.drawImage(chunk.canvas, sx, sz, CHUNK_PX * scale, CHUNK_PX * scale);
+      }
+    }
+
+    const psx = Math.floor((player.x - (cam.x - halfW)) * scale);
+    const psz = Math.floor((player.z - (cam.z - halfH)) * scale);
+    g.beginPath();
+    g.arc(psx, psz, Math.max(3, 6 * cam.zoom), 0, Math.PI * 2);
+    g.fillStyle = "#7ce";
+    g.fill();
+    g.strokeStyle = "#0008";
+    g.stroke();
+
+    if (player.wp) {
+      const wsx = Math.floor((player.wp.x - (cam.x - halfW)) * scale);
+      const wsz = Math.floor((player.wp.z - (cam.z - halfH)) * scale);
+      g.beginPath();
+      g.arc(wsx, wsz, Math.max(4, 5 * cam.zoom), 0, Math.PI * 2);
+      g.strokeStyle = "#fff8";
+      g.stroke();
+    }
+  }
+}
+
+
+// ===== Player and camera =====
+class Player{
+  constructor(x=0,z=0){
+    this.x=x; this.z=z;
+    this.vx=0; this.vz=0;
+    this.speed=120; // world units per second
+    this.radius=8;
+    this.hp=100; 
+    this.wp=null;
+
+    //roblox user-made stuff. Everything else is handled by roblox (hopefully)
+    // this.inventory = new Inventory();
+    // this.roster = new Roster();
+    this.FireClient = 0 // pretend this sends commands to roblox server
+  }
+  update(dt){
+    if(this.wp){
+      const dx=this.wp.x - this.x, dz=this.wp.z - this.z;
+      const L=Math.hypot(dx,dz);
+      if(L>1){ this.vx += (dx/L)*this.speed*0.8; this.vz += (dz/L)*this.speed*0.8; }
+      if(L<6) this.wp=null;
+    }
+    // integrate
+    this.x += this.vx*dt; this.z += this.vz*dt;
+    // damping
+    this.vx*=0.86; this.vz*=0.86;
+  }
+}
+//Chunk creation, chunks with biomes and then water that affects the heightmap
+//Start spawning flora in the chunk:
+//cosmetic flora (trees, shrubs), then flora you can interact with (berry bushes).
+//Entities/Creatures exist. The player gains a UI to choose from bear, cat, or dog as their starter
+//after choosing, they gain a creature UI and a creature of their choice.
+//WorldEntities service listens for that player now and spawns biome-specific creatures around them
+class FloraManager {
+    constructor() {
+        this.buffer = [];
+    }
+    checkIfWater(x, z, seed) {
+        const h = heightSample(x, z, seed);
+        return h.yG < h.yW;
+    }
+    biomeFloraPicker(biome) {
+        const floraOptions = {
+            Taiga: ['Pine Tree', 'Fir Tree', 'Berry Bush'],
+            Meadow: ['Oak Tree', 'Flower Patch', 'Berry Bush'],
+            Beach: ['Palm Tree', 'Cactus', 'Seaweed'],
+            Swamp: ['Mangrove Tree', 'Reed Patch', 'Mushroom Cluster'],
+        };
+        return floraOptions[biome] || [];
+    }
+    spawnFloraInChunk(chunkX, chunkZ, seed) {
+        for (let iz = 0; iz < CELLS_PER_CHUNK; iz++) {
+            for (let ix = 0; ix < CELLS_PER_CHUNK; ix++) {
+                const wx = (chunkX * CELLS_PER_CHUNK + ix) * Params.CELL;
+                const wz = (chunkZ * CELLS_PER_CHUNK + iz) * Params.CELL;
+                if (this.checkIfWater(wx, wz, seed)) continue;
+                const h = heightSample(wx, wz, seed);
+                const dominantBiome = dominant(h.weights);
+                const floraOptions = this.biomeFloraPicker(dominantBiome);
+                if (floraOptions.length > 0) {
+                    const rng = new RNG((wx * 73856093) ^ (wz * 19349663) ^ seed);
+                    const spawnChance = 0.1; // 10% chance to spawn flora in a cell
+                    if (rng.float() < spawnChance) {
+                        const floraType = floraOptions[rng.int(0, floraOptions.length - 1)];
+                        this.buffer.push({ type: floraType, x: wx, z: wz });
+                    }
                 }
             }
         }
-        beginCD(c, "Stomp", 5.0);
-        toastAt(c.HRP, "STOMP!", Color3.fromRGB(255, 180, 120));
-    },
-});
-
-// Bolt
-def({
-    id: "Bolt",
-    key: "F",
-    label: "Bolt",
-    cd: 1.2,
-    cast(ctx) {
-        const c = ctx.caster;
-        const tgt = (ctx.target && ctx.target.HRP) ? ctx.target : closestEnemy(c, 60);
-        if (!tgt) return;
-        tgt.Damage(c, { dtype: "zap", base: 7 });
-        beginCD(c, "Bolt", 1.2);
-        toastAt(tgt.HRP, "BOLT!", Color3.fromRGB(200, 200, 255));
-    },
-});
-
-Abilities.Get = function (id) {
-    return REGISTRY[id];
-};
-
-Abilities.All = function () {
-    return REGISTRY;
-};
-
-Abilities.GiveDefaults = function (pet, list) {
-    const chosen = list || ["Bite", "Dash"];
-    pet.Abilities = pet.Abilities || {};
-    for (const id of chosen) {
-        const defn = REGISTRY[id];
-        if (defn) {
-            pet.Abilities[id] = {
-                id: id,
-                key: defn.key,
-                label: defn.label,
-                cd: defn.cd,
-                cast: (caster, ctxOverride) => {
-                    const ctx = { caster: caster };
-                    if (ctxOverride) {
-                        for (const [k, v] of Object.entries(ctxOverride)) {
-                            ctx[k] = v;
-                        }
-                    }
-                    defn.cast(ctx);
-                },
-            };
+    }
+    playerInteractWithFlora(playerX, playerZ, interactionRadius) {
+        this.buffer = this.buffer.filter(flora => {
+            const dx = flora.x - playerX;
+            const dz = flora.z - playerZ;
+            const distSq = dx * dx + dz * dz;
+            if (distSq <= interactionRadius * interactionRadius) {
+                console.log(`Player interacted with ${flora.type} at (${flora.x.toFixed(1)}, ${flora.z.toFixed(1)})`);
+                return false; // Remove flora after interaction
+            }
+            return true; // Keep flora if not interacted with
+        });
+    }
+    despawnFloraOutsideRadius(playerX, playerZ, despawnRadius) {
+        this.buffer = this.buffer.filter(flora => {
+            const dx = flora.x - playerX;
+            const dz = flora.z - playerZ;
+            const distSq = dx * dx + dz * dz;
+            return distSq <= despawnRadius * despawnRadius;
+        });
+    }
+}
+class CreatureManager {
+    constructor() {
+        this.entities = [];
+    }
+    spawnCreature(type, x, z) {
+        const entity = new Creature(type, x, z);
+        this.entities.push(entity);
+        return entity;
+    }
+    tickEntities(dt) {
+        for (const entity of this.entities) {
+            // Update entity logic here (movement, behavior, etc.)
         }
     }
-    return pet.Abilities;
-};
-
-const Util = {
-    key(cx, cz) {
-        return `${cx}|${cz}`;
-    },
-    rngFor(cx, cz, seed) {
-        const hash = (cx * 73856093) ^ (cz * 19349663) ^ (seed * 9167);
-        const masked = hash & 0x7fffffff;
-        return new Math.seedrandom(masked);
-    },
-};
-const WorldGen = {
-    biomeMix(x, z, seed = Params.SEED) {
-        return BiomeNoise.biomeMix(x, z, seed);
-    },
-    heightAt(x, z, seed = Params.SEED) {
-        return Height.sample(x, z, seed);
-    },
-    pickMaterials(weights) {
-        return Materials.pickMaterials(weights);
-    },
-};
-
-const WorldParams = {
-    CELL: 20,
-    WATER_BASE: 8,
-    SEED: 1335,
-};
-
-const Biomes = {
-    Taiga: {
-        ground: 'Snow',
-        high: 'Ice',
-        density: 1.3,
-    },
-    Meadow: {
-        ground: 'Grass',
-        high: 'Rock',
-        density: 1.0,
-    },
-    Beach: {
-        ground: 'Sand',
-        high: 'Rock',
-        density: 0.6,
-    },
-    Swamp: {
-        ground: 'Mud',
-        high: 'Ground',
-        density: 0.9,
-    },
-    Mountains: {
-        ground: 'Ground',
-        high: 'Rock',
-        density: 0.7,
-    },
-    Hills: {
-        ground: 'Grass',
-        high: 'Grass',
-        density: 0.9,
-    },
-};
-
-const Materials = {
-    pickMaterials(weights) {
-        let best = 'Meadow';
-        let bestW = -1;
-
-        for (const [k, w] of Object.entries(weights)) {
-            if (w > bestW) {
-                best = k;
-                bestW = w;
+    despawnCreature(entity) {
+        const index = this.entities.indexOf(entity);
+        if (index !== -1) {
+            this.entities.splice(index, 1);
+        }
+    }
+}
+class globalAbilityFunctions{
+    constructor(dict){
+        this.dict = dict;
+    }
+}
+class WorldEntityManager{
+    constructor(type, x, z){
+        this.type=type;
+        this.x=x; this.z=z;
+        this.life = 100;
+        this.entityState={};
+    }
+    createTargetedProjectile(abilityName, targetX, targetZ){
+        // Logic to create and launch a projectile towards (targetX, targetZ)
+    }
+    createFreeProjectile(abilityName, directionX, directionZ){
+        // Logic to create and launch a projectile in the direction (directionX, directionZ)
+    }
+    createFreeAreaEffect(abilityName, centerX, centerZ, radius){
+        // Logic to create an area effect at (centerX, centerZ) with the specified radius
+    }
+    createTargetedAreaEffect(abilityName, targetX, targetZ, radius){
+        // Logic to create an area effect centered on a target at (targetX, targetZ) with the specified radius
+    }
+    tick(dt){
+        // Update entity logic here (movement, behavior, etc.)
+    }
+}
+class Projectile{
+    constructor(type, x, z, directionX, directionZ, speed){
+        this.type=type;
+        this.x=x; this.z=z;
+        this.directionX=directionX; this.directionZ=directionZ;
+        this.speed=speed;
+        this.followTarget=null;
+    }
+}
+class AreaEffect{
+    constructor(type, centerX, centerZ, radius, duration){
+        this.type=type;
+        this.centerX=centerX; this.centerZ=centerZ;
+        this.radius=radius;
+        this.duration=duration;
+        this.followTarget=null;
+    }
+}
+class AbilitySet{
+    constructor(abilities){
+        this.abilities = abilities; // abilities is a dictionary of abilityName -> abilityFunction
+    }
+    useAbility(abilityName, user, target){
+        const abilityFunc = this.abilities[abilityName];
+        if(abilityFunc){
+            abilityFunc(user, target);
+        }
+    }
+    requestAbilityUse(abilityName, user, target){
+        // In a real Roblox environment, this would send a request to the server
+        user.FireClient(abilityName, target);
+        if(!user.cooldowns.isOnCooldown(abilityName)){
+            this.useAbility(abilityName, user, target);
+        }
+    }
+}
+class Cooldowns{
+    constructor(){
+        this.cooldowns = {}; // abilityName -> timeRemaining
+    }
+    setCooldown(abilityName, duration){
+        this.cooldowns[abilityName] = duration;
+    }
+    tick(dt){
+        for(const abilityName in this.cooldowns){
+            this.cooldowns[abilityName] -= dt;
+            if(this.cooldowns[abilityName] <= 0){
+                delete this.cooldowns[abilityName];
             }
         }
-
-        const biome = Biomes[best] || Biomes.Meadow;
-        return { ground: biome.ground, high: biome.high, biome: best };
-    },
-};
-
-clamp01 = (value, min, max) => Math.max(min, Math.min(max, value));
-
-const SHAPE = {
-    Taiga: { amp: 142, freq: 0.018, rough: 0.55, base: 2, water: 0 },
-    Meadow: { amp: 118, freq: 0.006, rough: 0.30, base: 0, water: 0 },
-    Beach: { amp: 106, freq: 0.010, rough: 0.25, base: -3, water: -1 },
-    Swamp: { amp: 108, freq: 0.004, rough: 0.25, base: -1, water: 2 },
-};
-
-function fbm(x, z, seed, f, rough) {
-    let sum = 0;
-    let amp = 1;
-    rough = clamp(rough, 0.15, 0.95);
-    for (let i = 1; i <= 3; i++) {
-        sum += noise(x * f, z * f, (seed || 0) * i * 0.137) * amp;
-        f *= 2;
-        amp *= rough;
     }
-    return sum;
-}
-
-const Heightfield = {
-    sample(x, z, seed) {
-        const w = BiomeNoise.biomeMix(x, z, seed);
-        let amp = 0, freq = 0, rough = 0, base = 0, water = 0;
-
-        for (const [name, wt] of Object.entries(w)) {
-            const p = SHAPE[name];
-            if (p) {
-                amp += wt * p.amp;
-                freq += wt * p.freq;
-                rough += wt * p.rough;
-                base += wt * p.base;
-                water += wt * p.water;
-            }
-        }
-
-        const n = fbm(x, z, seed, freq, rough);
-        const nh = clamp(0.5 + 0.5 * n, 0, 1);
-        const yG = base + amp * nh;
-        const yW = Params.WATER_BASE + water;
-
-        return { yG, yW, weights: w };
-    },
-};
-
-const P = WorldParams;
-
-const cache = {};
-
-function weightsAtCell(ix, iz, seed = 0) {
-    const k = `${ix}|${iz}`;
-    if (cache[k]) return cache[k];
-
-    const x = (ix + 0.5) * P.CELL;
-    const z = (iz + 0.5) * P.CELL;
-    const T = clamp(0.5 + 0.5 * noise(x * 0.00035, z * 0.00035, seed * 0.11), 0, 1);
-    const W = clamp(0.5 + 0.5 * noise(x * 0.00070, z * 0.00070, seed * 0.37), 0, 1);
-
-    const wTaiga = (1 - T) * (1 - W);
-    const wMeadow = T * (1 - W);
-    const wSwamp = (1 - T) * W * 0.7 + T * W * 0.3;
-
-    const coast = 0.5 + 0.5 * noise(x * 0.00090, z * 0.00090, seed * 0.59);
-    const nearCoast = clamp(1 - Math.abs(coast - 0.5) * 8, 0, 1);
-    const wBeach = nearCoast * 0.9;
-
-    const s = wTaiga + wMeadow + wSwamp + wBeach;
-    const out = s < 1e-6 ? { Meadow: 1 } : {
-        Taiga: wTaiga / s,
-        Meadow: wMeadow / s,
-        Swamp: wSwamp / s,
-        Beach: wBeach / s,
-    };
-
-    cache[k] = out;
-    return out;
-}
-
-function addScaled(out, t, s) {
-    for (const [k, v] of Object.entries(t)) {
-        out[k] = (out[k] || 0) + v * s;
+    isOnCooldown(abilityName){
+        return this.cooldowns.hasOwnProperty(abilityName);
     }
 }
-
-const BiomeNoise = {
-    biomeMix(x, z, seed) {
-        const gx = Math.floor(x / P.CELL);
-        const gz = Math.floor(z / P.CELL);
-        const fx = x / P.CELL - gx;
-        const fz = z / P.CELL - gz;
-
-        const w00 = weightsAtCell(gx, gz, seed);
-        const w10 = weightsAtCell(gx + 1, gz, seed);
-        const w01 = weightsAtCell(gx, gz + 1, seed);
-        const w11 = weightsAtCell(gx + 1, gz + 1, seed);
-
-        const out = {};
-        addScaled(out, w00, (1 - fx) * (1 - fz));
-        addScaled(out, w10, fx * (1 - fz));
-        addScaled(out, w01, (1 - fx) * fz);
-        addScaled(out, w11, fx * fz);
-
-        let s = 0;
-        for (const v of Object.values(out)) s += v;
-        if (s > 1e-6) {
-            for (const k in out) {
-                out[k] /= s;
-            }
-        }
-        return out;
-    },
-};
-// ServerScriptService/Game/AbilityService.js
-
-const clamp02 = (x) => Math.max(0, Math.min(1, x));
-
-const dotProps = (props, comp) => {
-  let s = 0;
-  for (const [k, coef] of Object.entries(props)) {
-    s += (comp[k] || 0) * coef;
-  }
-  return s;
-};
-
-const baseFrom = (move, caster, cat) => {
-  const b = move.baseAtk || {};
-  const m = move.atkMult || {};
-  const cs = caster.stats || {};
-  if (cat === Moves.MoveCat.PHY) {
-    return (b.pAtk || 0) + (cs.pAtk || 0) * (m.pAtk || 0);
-  } else {
-    return (b.eAtk || 0) + (cs.eAtk || 0) * (m.eAtk || 0);
-  }
-};
-
-const computeDamage = (moveId, atkTypeKey, caster, target) => {
-  const tdef = target.composite || {};
-  const moveType = Moves.MoveTypes[atkTypeKey];
-  if (!moveType) return 0;
-  const cat = moveType.cat;
-  const move = Moves.Melee[moveId] || Moves.Projectile[moveId];
-  if (!move) return 0;
-
-  const base = baseFrom(move, caster, cat);
-  const flatBypass = clamp01(dotProps(moveType.flatBypass, tdef));
-  const resist = clamp01(dotProps(moveType.resistedBy, tdef));
-
-  const after = base * (1 - flatBypass) * (1 - resist);
-  if (cat === Moves.MoveCat.PHY) {
-    const def = (target.stats && target.stats.def) || 0;
-    return Math.max(1, Math.floor(after - 0.3 * def + 0.5));
-  } else {
-    return Math.max(1, Math.floor(after + 0.5));
-  }
-};
-
-
-// effect hook
-// const applyBerryEffect = (p, kind) => {
-// 	// TODO: call your CreatureService here
-// 	if (kind === 'red') {
-// 		print((`Heal used by ${p.Name}`));
-// 	} else if (kind === 'yellow') {
-// 		print((`Strength used by ${p.Name}`));
-// 	} else if (kind === 'blue') {
-// 		print((`Revive used by ${p.Name}`));
-// 	}
-// };
-
-// // picking from bush
-// const hookBush = (bush) => {
-// 	const prompt = findFirstChildOfClass(bush, 'ProximityPrompt');
-// 	if (!prompt) return;
-// 	let busy = false;
-// 	prompt.onTrigger = (player) => {
-// 		if (busy) return;
-// 		busy = true;
-
-// 		const kind = bush.attributes?.BerryKind;
-// 		let uses = Math.max(0, bush.attributes?.Uses || 0);
-
-// 		if ((kind === 'red' || kind === 'yellow' || kind === 'blue') && uses > 0) {
-// 			console.log(`Giving ${kind} berry to player ${player.name}`);
-// 			uses -= 1;
-// 			bush.attributes.Uses = uses;
-
-// 			if (bush.size > 3) {
-// 				bush.size -= 0.4;
-// 			}
-
-// 			if (uses <= 0) {
-// 				console.log(`Berry bush ${bush.name} is depleted and removed.`);
-// 			}
-// 		}
-
-// 		busy = false;
-// 	};
-// };
-
-// Simplified and platform-independent version of the code
-
-// Custom tagging system
-const taggedObjects = new Map();
-
-function addTag(object, tag) {
-  if (!taggedObjects.has(tag)) {
-    taggedObjects.set(tag, []);
-  }
-  taggedObjects.get(tag).push(object);
-}
-
-function getTagged(tag) {
-  return taggedObjects.get(tag) || [];
-}
-
-function removeTag(object, tag) {
-  if (taggedObjects.has(tag)) {
-    const objects = taggedObjects.get(tag);
-    taggedObjects.set(tag, objects.filter((obj) => obj !== object));
-  }
-}
-
-// Example usage of tagging system
-const berryBush = { name: 'BerryBush1', type: 'BasePart' };
-addTag(berryBush, 'BerryBush');
-
-for (const inst of getTagged('BerryBush')) {
-  if (inst.type === 'BasePart') {
-    console.log(`Processing berry bush: ${inst.name}`);
-  }
-}
-
-// Simplified function to find the first child of a specific type
-function findFirstChildOfClass(parent, className) {
-  if (!parent || !parent.children) return null;
-
-  for (const child of parent.children) {
-    if (child.type === className) {
-      return child;
+class StatsSet{
+    constructor(stats){
+        this.baseStats = stats; // baseStats is a dictionary of statName -> baseValue
+        this.extraStats = {};
+        this.finalStats = {};
     }
-  }
-  return null;
+    recalculateStats(){}
 }
-
-// Example usage of findFirstChildOfClass
-const bush = {
-  children: [
-    { type: 'ProximityPrompt', name: 'Prompt1' },
-    { type: 'OtherType', name: 'OtherChild' },
-  ],
-};
-
-const prompt = findFirstChildOfClass(bush, 'ProximityPrompt');
-if (prompt) {
-  console.log(`Found ProximityPrompt: ${prompt.name}`);
+class CreatureBrain{
+    constructor(entity){}
 }
-
-// Simplified hookBush function
-function hookBush(bush) {
-  const prompt = findFirstChildOfClass(bush, 'ProximityPrompt');
-  if (!prompt) return;
-
-  let busy = false;
-  prompt.onTrigger = (player) => {
-    if (busy) return;
-    busy = true;
-
-    const kind = bush.attributes?.BerryKind;
-    let uses = Math.max(0, bush.attributes?.Uses || 0);
-
-    if ((kind === 'red' || kind === 'yellow' || kind === 'blue') && uses > 0) {
-      console.log(`Giving ${kind} berry to player ${player.name}`);
-      uses -= 1;
-      bush.attributes.Uses = uses;
-
-      if (bush.size > 3) {
-        bush.size -= 0.4;
-      }
-
-      if (uses <= 0) {
-        console.log(`Berry bush ${bush.name} is depleted and removed.`);
-      }
-    }
-
-    busy = false;
-  };
-}
-
-// Example usage of hookBush
-// hookBush({
-//   name: 'BerryBush1',
-//   attributes: { BerryKind: 'red', Uses: 5 },
-//   size: 4,
-//   children: [{ type: 'ProximityPrompt', name: 'Prompt1' }],
-// });
-
-// Centralized Event System
-const EventEmitter = require('events');
-const eventEmitter = new EventEmitter();
-
-// Simplified Inventory System
-const Inventory = {
-  items: {},
-
-  tryUse(player, kind) {
-    console.log(`Player ${player.name} is trying to use ${kind}`);
-    if (this.items[kind] > 0) {
-      this.items[kind] -= 1;
-      return true;
-    }
-    return false;
-  },
-
-  addItem(kind, amount) {
-    this.items[kind] = (this.items[kind] || 0) + amount;
-  },
-};
-
-// Simplified Effect Application
-function applyBerryEffect(player, kind) {
-  console.log(`Applying ${kind} effect to ${player.name}`);
-}
-
-// Centralized Event Handling
-function setupEventHandlers() {
-  eventEmitter.on('useBerry', (player, kind) => {
-    if (['red', 'yellow', 'blue'].includes(kind)) {
-      if (Inventory.tryUse(player, kind)) {
-        applyBerryEffect(player, kind);
-      } else {
-        console.log(`Player ${player.name} has no ${kind} berries left.`);
-      }
-    } else {
-      console.log(`Invalid berry kind: ${kind}`);
-    }
-  });
-}
-
-// Example Usage
-setupEventHandlers();
-Inventory.addItem('red', 5);
-Inventory.addItem('yellow', 3);
-Inventory.addItem('blue', 2);
-
-const player = { name: 'Player1' };
-eventEmitter.emit('useBerry', player, 'red');
-eventEmitter.emit('useBerry', player, 'yellow');
-eventEmitter.emit('useBerry', player, 'blue');
-eventEmitter.emit('useBerry', player, 'green'); // Invalid berry kind
-
-// Game configuration class
-class GameConfigClient {
+class StatusEffects {
   constructor() {
-    this.players = new Map();
-    this.MIN_R = 3;
-    this.MAX_R = 7;
-    this.STARTERS = ['Pyro', 'Aqua', 'Terra'];
+    this.effects = []; // Array of active effects
   }
 
-  addPlayer(playerId) {
-    this.players.set(playerId, {
-      radiusChunks: 3,
-      starterChosen: false,
-      starterId: '',
+  addEffect(effect) {
+    this.effects.push(effect);
+  }
+
+  tick(dt) {
+    this.effects = this.effects.filter(effect => {
+      effect.duration -= dt;
+      if (effect.duration <= 0) {
+        if (effect.onExpire) effect.onExpire();
+        return false; // Remove expired effect
+      }
+      if (effect.onTick) effect.onTick(dt);
+      return true; // Keep active effect
     });
   }
-
-  setRadius(playerId, radius) {
-    const player = this.players.get(playerId);
-    if (player) {
-      player.radiusChunks = Math.max(this.MIN_R, Math.min(this.MAX_R, Math.floor(radius)));
-    }
-  }
-
-  chooseStarter(playerId, starterId) {
-    const player = this.players.get(playerId);
-    if (player && !player.starterChosen && this.STARTERS.includes(starterId)) {
-      player.starterChosen = true;
-      player.starterId = starterId;
-    }
-  }
 }
-
-// Roster management class
-class RosterServiceClient {
-  constructor() {
-    this.rosters = new Map();
-  }
-
-  getRoster(playerId) {
-    return this.rosters.get(playerId) || { list: {}, active: null };
-  }
-
-  chooseStarter(playerId, family) {
-    const roster = this.getRoster(playerId);
-    if (!roster.list[family]) {
-      roster.list[family] = this.createCreature(family);
-      roster.active = roster.active || family;
+class Creature{
+    constructor(type, x, z){
+        this.type=type;
+        this.x=x; this.z=z;
+        this.entityState={};
+        
+        // Additional properties like health, behavior state, etc. can be added here
+        this.cooldowns = new Cooldowns();
+        this.abilities = new AbilitySet({});
+        this.stats = new StatsSet({});
+        this.brain = new CreatureBrain(this);
+        this.statusEffects = new StatusEffects(); // Add status effects manager
     }
-  }
-
-  createCreature(family) {
-    return {
-      id: family,
-      name: family,
-      stats: {
-        pAtk: 10,
-        eAtk: 8,
-        def: 6,
-        speed: 7,
-        maxHP: 30,
-        hp: 30,
-      },
-      abilities: [{ id: 'basic_attack', name: 'Basic Attack', cd: 0.8 }],
-    };
-  }
+    tick(dt) {
+        this.statusEffects.tick(dt); // Process status effects
+        this.cooldowns.tick(dt); // Process cooldowns
+        // ...other entity logic...
+    }
+}
+class PlayerCreature extends Creature{
+    constructor(type, x, z){
+        super(type, x, z);
+        this.activeRoster = false;
+        this.autonomy = true;
+        this.commandQueue = [];
+        this.capturable = false;
+        this.inPlayerRoster = true;
+        this.inPlayerRadius = false;
+    }
+}
+class WildCreature extends Creature{
+    constructor(type, x, z){
+        super(type, x, z);
+        this.autonomy = true;
+        this.capturable = true;
+        this.inPlayerRoster = false;
+        this.inPlayerRadius = false;
+    }
 }
 
 
+// ===== Canvas, input, main loop =====
+const canvas = document.getElementById('game');
+const g = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+const overlay = document.getElementById('overlay');
+let W=innerWidth, H=innerHeight;
+function resize(){ W=innerWidth; H=innerHeight; canvas.width=W; canvas.height=H; }
+addEventListener('resize', resize, {passive:true}); resize();
 
-//JS only stuff
-const canvas = document.createElement('canvas');
-canvas.width = 800; 
-canvas.height = 600;
-document.body.appendChild(canvas); 
-const ctx = canvas.getContext('2d');
+let seed = 1335, rng = new RNG(seed);
+let player = new Player(0,0);
+const chunkManager = new ChunkManager();
+const renderer = new Renderer(canvas, player, chunkManager);
 
-// Game state
-const gameState = {
-  players: [
-    { x: 100, y: 100, vx: 2, vy: 1, color: 'red' },
-    { x: 200, y: 150, vx: -1, vy: 2, color: 'blue' },
-  ],
+let cam = { x:0, z:0, zoom:1.0 }; // zoom scales pixels/world
+
+const keys=new Set();
+addEventListener('keydown', e=>{ keys.add(e.code); if(["KeyQ","KeyE"].includes(e.code)) e.preventDefault(); });
+addEventListener('keyup', e=>{ keys.delete(e.code); });
+canvas.addEventListener('pointerdown', e=>{
+  const r=canvas.getBoundingClientRect();
+  const wx = cam.x + (e.clientX - r.left - W/2)/(cam.zoom) * Params.CELL;
+  const wz = cam.z + (e.clientY - r.top  - H/2)/(cam.zoom) * Params.CELL;
+  player.wp = { x:wx, z:wz };
+});
+document.getElementById('center').onclick = ()=>{ cam.x=player.x; cam.z=player.z; };
+document.getElementById('regen').onclick = ()=>{
+  seed = (seed*1664525 + 1013904223)>>>0;
+  reseedNoise(seed&0xffff);
+  CHUNKS.clear();
 };
+addEventListener('wheel', e=>{
+  cam.zoom = clamp(cam.zoom * (e.deltaY<0? 1.1: 0.9), 0.5, 3.0);
+}, {passive:true});
 
-function update(deltaTime) {
-  for (const player of gameState.players) {
-    player.x += player.vx * deltaTime;
-    player.y += player.vy * deltaTime;
-
-    if (player.x < 0 || player.x > canvas.width) player.vx *= -1;
-    if (player.y < 0 || player.y > canvas.height) player.vy *= -1;
+function stepInput(dt){
+  let ax=0, az=0;
+  if(keys.has('KeyW')) az -= 1;
+  if(keys.has('KeyS')) az += 1;
+  if(keys.has('KeyA')) ax -= 1;
+  if(keys.has('KeyD')) ax += 1;
+  if(ax||az){
+    const L=Math.hypot(ax,az)||1; ax/=L; az/=L;
+    const sp = player.speed * (keys.has('ShiftLeft')? 1.8:1.0);
+    player.vx += ax*sp; player.vz += az*sp;
   }
+  if(keys.has('KeyQ')) cam.zoom = clamp(cam.zoom*0.98, 0.5, 3.0);
+  if(keys.has('KeyE')) cam.zoom = clamp(cam.zoom*1.02, 0.5, 3.0);
 }
 
-function render() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear the canvas
-
-  // Draw players
-  for (const player of gameState.players) {
-    ctx.fillStyle = player.color;
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, 10, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Debug info: Draw velocity vector
-    ctx.strokeStyle = 'white';
-    ctx.beginPath();
-    ctx.moveTo(player.x, player.y);
-    ctx.lineTo(player.x + player.vx * 10, player.y + player.vy * 10);
-    ctx.stroke();
-  }
+// ===== Render world and player =====
+function render(){
+  renderer.render(seed);
 }
 
-// Game loop
-let lastTime = 0;
-function gameLoop(timestamp) {
-  const deltaTime = (timestamp - lastTime) / 1000; // Convert to seconds
-  lastTime = timestamp;
+function dominant(w){ let best="Meadow", bw=-1; for(const [k,v] of Object.entries(w)){ if(v>bw){ bw=v; best=k; } } return best; }
 
-  update(deltaTime); // Update game state
-  render(); // Render the game state
-
-  requestAnimationFrame(gameLoop); // Loop
+// ===== Main loop =====
+let last=performance.now()/1000;
+function frame(){
+  const now=performance.now()/1000, dt=Math.min(0.05, now-last); last=now;
+  stepInput(dt);
+  player.update(dt);
+  render();
+  requestAnimationFrame(frame);
 }
-
-// Start the game loop
-requestAnimationFrame(gameLoop);
+requestAnimationFrame(frame);
