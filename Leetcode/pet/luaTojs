@@ -1,3 +1,5 @@
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 class RNG{constructor(seed=123456789){this.s=(seed>>>0)||1;}next(){this.s=(1664525*this.s+1013904223)>>>0;return this.s;}float(){return (this.next()&0xffff)/0x10000;}int(a,b){return a + (this.next()%(b-a+1));}}
 // 2D simplex noise
@@ -146,197 +148,101 @@ function heightSample(x,z,seed){
   return { yG, yW, weights:w };
 }
 
-// ===== Chunk system (tile pre-render) =====
-const TILE = 16;              // pixels per cell
-const CELLS_PER_CHUNK = 32;   // 32x32 cells per chunk
-const CHUNK_PX = TILE * CELLS_PER_CHUNK;
-
-class ChunkData {
-  constructor(cx, cz, seed) {
-    this.cx = cx;
-    this.cz = cz;
-    this.seed = seed;
-    this.heightmap = [];
-    this.biomeWeights = [];
-    this.flora = [];
-
-    this.generateData();
-  }
-
-  generateData() {
-    for (let iz = 0; iz < CELLS_PER_CHUNK; iz++) {
-      this.heightmap[iz] = [];
-      this.biomeWeights[iz] = [];
-      for (let ix = 0; ix < CELLS_PER_CHUNK; ix++) {
-        const wx = (this.cx * CELLS_PER_CHUNK + ix) * Params.CELL;
-        const wz = (this.cz * CELLS_PER_CHUNK + iz) * Params.CELL;
-
-        const h = heightSample(wx, wz, this.seed);
-        this.heightmap[iz][ix] = h;
-        this.biomeWeights[iz][ix] = h.weights;
-
-        if (h.yG >= h.yW) {
-          const dominantBiome = dominant(h.weights);
-          const floraOptions = FloraManager.prototype.biomeFloraPicker(dominantBiome);
-          if (floraOptions.length > 0) {
-            const rng = new RNG((wx * 73856093) ^ (wz * 19349663) ^ this.seed);
-            const spawnChance = 0.1; // 10% chance to spawn flora
-            if (rng.float() < spawnChance) {
-              const floraType = floraOptions[rng.int(0, floraOptions.length - 1)];
-              this.flora.push({ type: floraType, x: wx, z: wz });
+//non-roblox debug
+class World{
+    constructor(){
+        this.seed = 1335
+        this.renderer = new Renderer();
+        this.chunkManager = new ChunkManager();
+        this.player = null;
+    }
+    tick(){
+        if(this.player){
+            this.chunkTick(this.player);
+            this.chunkRender();
+        }
+    }
+    chunkTick(player){
+        const pcx = Math.floor(player.x / (Params.CELL * CELLS_PER_CHUNK));
+        const pcz = Math.floor(player.z / (Params.CELL * CELLS_PER_CHUNK));
+        for (let dz = -1; dz <= 1; dz++) {
+            for (let dx = -1; dx <= 1; dx++) {
+                const cx = pcx + dx;
+                const cz = pcz + dz;
+                if (!this.chunkManager.chunks.has(`${cx},${cz}`)){
+                    console.log(`Generating chunk ${cx}, ${cz}`);
+                    this.chunkManager.generateChunk(cx, cz);
+                } else {
+                    const chunk = this.chunkManager.loadChunk(cx, cz);
+                }
             }
-          }
         }
-      }
     }
-  }
+    chunkRender(){
+        //render chunks around player
+        this.renderer.render(this.chunkManager.activeChunks);
+    }
 }
-
-class Chunk {
-  constructor(cx, cz, seed) {
-    this.cx = cx;
-    this.cz = cz;
-    this.seed = seed;
-    this.data = new ChunkData(cx, cz, seed);
-
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = CHUNK_PX;
-    this.canvas.height = CHUNK_PX;
-    this.g = this.canvas.getContext('2d');
-
-    this.draw();
-  }
-
-  draw() {
-    const g = this.g;
-    for (let iz = 0; iz < CELLS_PER_CHUNK; iz++) {
-      for (let ix = 0; ix < CELLS_PER_CHUNK; ix++) {
-        const h = this.data.heightmap[iz][ix];
-        const w = h.weights;
-
-        const biomeColor = blend([
-          [w.Meadow || 0, [86, 140, 80]],
-          [w.Taiga || 0, [210, 216, 220]],
-          [w.Swamp || 0, [60, 70, 50]],
-          [w.Beach || 0, [220, 205, 150]],
-        ]);
-
-        const isWater = h.yG < h.yW;
-        const col = isWater ? mix(biomeColor, [70, 110, 180], 0.55) : biomeColor;
-        g.fillStyle = rgb(col);
-        g.fillRect(ix * TILE, iz * TILE, TILE, TILE);
-
-        // Contour lines
-        const c = (Math.floor(h.yG / 6) % 2 === 0) ? 10 : 0;
-        if (!isWater && c) {
-          g.fillStyle = 'rgba(0,0,0,0.06)';
-          g.fillRect(ix * TILE, iz * TILE, TILE, 1);
+class Renderer{
+    constructor(){
+        this.cam = {x: 0, z: 0, zoom:0}
+    }
+    render(chunkdata){
+        //render chunkdata to canvas
+        for(const chunkKey of chunkdata){
+            const chunk = chunkdata.get(chunkKey);
+            console.log(chunk)
+            for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
+                for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
+                    const h = chunk.data.get(`${ix},${iz}`);
+                    const wx = (chunk.cx*CELLS_PER_CHUNK + ix)*Params.CELL;
+                    const wz = (chunk.cz*CELLS_PER_CHUNK + iz)*Params.CELL;
+                    const sx = (wx - this.cam.x) * (1 + this.cam.zoom) + canvas.width/2;
+                    const sz = (wz - this.cam.z) * (1 + this.cam.zoom) + canvas.height/2;
+                    const color = h.yG < h.yW ? [20, 60, 200] : [34, 139, 34];
+                    ctx.fillStyle = rgb(color);
+                    ctx.fillRect(sx, sz, Params.CELL*(1+this.cam.zoom), Params.CELL*(1+this.cam.zoom));
+                }
+            }
         }
-      }
     }
-  }
 }
 
-// Update ChunkManager to use the new ChunkData separation
-class ChunkManager {
-  constructor() {
-    this.chunks = new Map();
-  }
-
-  key(cx, cz) {
-    return `${cx}|${cz}`;
-  }
-
-  getChunk(cx, cz, seed) {
-    const k = this.key(cx, cz);
-    let chunk = this.chunks.get(k);
-    if (!chunk || chunk.seed !== seed) {
-      chunk = new Chunk(cx, cz, seed);
-      this.chunks.set(k, chunk);
+class ChunkManager{
+    constructor(){
+        this.chunks = new Map();
+        this.activeChunks = new Set();
     }
-    return chunk;
-  }
-
-  unloadChunks(minX, maxX, minZ, maxZ) {
-    for (const key of this.chunks.keys()) {
-      const [cx, cz] = key.split('|').map(Number);
-      if (cx < minX || cx > maxX || cz < minZ || cz > maxZ) {
-        this.chunks.delete(key);
-      }
+    generateChunk(cx, cz){
+        const chunk = new Chunk(cx, cz);
+        chunk.generateChunk();
+        this.chunks.set(`${cx},${cz}`, chunk);
     }
-  }
+    loadChunk(cx, cz){
+        const chunk = this.chunks.get(`${cx},${cz}`);
+    }
+    unloadChunk(cx, cz){
+        this.activeChunks.delete(`${cx},${cz}`);
+    }
+
 }
-
-class Renderer {
-  constructor(canvas, player, chunkManager) {
-    this.canvas = canvas;
-    this.g = canvas.getContext('2d');
-    this.player = player;
-    this.chunkManager = chunkManager;
-    this.cam = { x: 0, z: 0, zoom: 1.0 };
-    this.W = innerWidth;
-    this.H = innerHeight;
-    this.resize();
-    addEventListener('resize', () => this.resize(), { passive: true });
-  }
-
-  resize() {
-    this.W = innerWidth;
-    this.H = innerHeight;
-    this.canvas.width = this.W;
-    this.canvas.height = this.H;
-  }
-
-  render(seed) {
-    const { g, cam, W, H, chunkManager, player } = this;
-
-    cam.x += (player.x - cam.x) * 0.12;
-    cam.z += (player.z - cam.z) * 0.12;
-
-    const scale = cam.zoom / Params.CELL;
-    const halfW = W / 2 / scale, halfH = H / 2 / scale;
-    const minX = cam.x - halfW, maxX = cam.x + halfW;
-    const minZ = cam.z - halfH, maxZ = cam.z + halfH;
-    const cMinX = Math.floor(minX / Params.CELL / CELLS_PER_CHUNK);
-    const cMaxX = Math.floor(maxX / Params.CELL / CELLS_PER_CHUNK);
-    const cMinZ = Math.floor(minZ / Params.CELL / CELLS_PER_CHUNK);
-    const cMaxZ = Math.floor(maxZ / Params.CELL / CELLS_PER_CHUNK);
-
-    chunkManager.unloadChunks(cMinX - 1, cMaxX + 1, cMinZ - 1, cMaxZ + 1);
-
-    g.clearRect(0, 0, W, H);
-    for (let cz = cMinZ; cz <= cMaxZ; cz++) {
-      for (let cx = cMinX; cx <= cMaxX; cx++) {
-        const chunk = chunkManager.getChunk(cx, cz, seed);
-        const worldX = cx * CELLS_PER_CHUNK * Params.CELL;
-        const worldZ = cz * CELLS_PER_CHUNK * Params.CELL;
-        const sx = Math.floor((worldX - (cam.x - halfW)) * scale);
-        const sz = Math.floor((worldZ - (cam.z - halfH)) * scale);
-        g.imageSmoothingEnabled = false;
-        g.drawImage(chunk.canvas, sx, sz, CHUNK_PX * scale, CHUNK_PX * scale);
-      }
+class Chunk{
+    constructor(cx, cz){
+        this.cx = cx;
+        this.cz = cz;
+        this.data = new Map();
     }
-
-    const psx = Math.floor((player.x - (cam.x - halfW)) * scale);
-    const psz = Math.floor((player.z - (cam.z - halfH)) * scale);
-    g.beginPath();
-    g.arc(psx, psz, Math.max(3, 6 * cam.zoom), 0, Math.PI * 2);
-    g.fillStyle = "#7ce";
-    g.fill();
-    g.strokeStyle = "#0008";
-    g.stroke();
-
-    if (player.wp) {
-      const wsx = Math.floor((player.wp.x - (cam.x - halfW)) * scale);
-      const wsz = Math.floor((player.wp.z - (cam.z - halfH)) * scale);
-      g.beginPath();
-      g.arc(wsx, wsz, Math.max(4, 5 * cam.zoom), 0, Math.PI * 2);
-      g.strokeStyle = "#fff8";
-      g.stroke();
+    generateChunk(){
+        for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
+            for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
+                const wx = (this.cx*CELLS_PER_CHUNK + ix)*Params.CELL;
+                const wz = (this.cz*CELLS_PER_CHUNK + iz)*Params.CELL;
+                const h = heightSample(wx, wz, Params.SEED);
+                this.data.set(`${ix},${iz}`, h);
+            }
+        }
     }
-  }
 }
-
 
 // ===== Player and camera =====
 class Player{
@@ -349,9 +255,11 @@ class Player{
     this.wp=null;
 
     //roblox user-made stuff. Everything else is handled by roblox (hopefully)
-    // this.inventory = new Inventory();
-    // this.roster = new Roster();
+    this.inventory = new Inventory();
+    this.roster = new Roster();
+    this.storedCreatures = new StoringCreature();
     this.FireClient = 0 // pretend this sends commands to roblox server
+
   }
   update(dt){
     if(this.wp){
@@ -449,6 +357,32 @@ class CreatureManager {
         if (index !== -1) {
             this.entities.splice(index, 1);
         }
+    }
+}
+class RosterService { //validates wild to player-owned creature data
+    constructor() {
+    }
+    wildToPlayerCreature(wildCreature) {
+        const playerCreature = new PlayerCreature(wildCreature.type, wildCreature.x, wildCreature.z);
+        // Copy relevant data from wildCreature to playerCreature
+        return playerCreature;
+    }
+}
+class Roster {
+    constructor(){
+        this.creatures = [];
+    }
+
+}
+class StoringCreature{
+    constructor(creature, storageData){
+        this.creature = creature;
+        this.storageData = storageData; // e.g., health, experience, etc.
+    }
+}
+class Inventory{
+    constructor(){
+        this.items = {};
     }
 }
 class globalAbilityFunctions{
@@ -571,6 +505,7 @@ class Creature{
         this.type=type;
         this.x=x; this.z=z;
         this.entityState={};
+        this.requests = {vel: {x:0, z:0}, basicAttack:false};
         
         // Additional properties like health, behavior state, etc. can be added here
         this.cooldowns = new Cooldowns();
@@ -607,36 +542,23 @@ class WildCreature extends Creature{
 }
 
 
+//things sent to the HUD:
+//if starting out: Choose starter HUD
+//Options to request more or less chunks seen, etc
+//After picking creature: Creature stat HUD
+//Creature Abilities and Cooldowns.
+
+
 // ===== Canvas, input, main loop =====
-const canvas = document.getElementById('game');
-const g = canvas.getContext('2d');
-const hud = document.getElementById('hud');
-const overlay = document.getElementById('overlay');
-let W=innerWidth, H=innerHeight;
-function resize(){ W=innerWidth; H=innerHeight; canvas.width=W; canvas.height=H; }
-addEventListener('resize', resize, {passive:true}); resize();
-
-let seed = 1335, rng = new RNG(seed);
-let player = new Player(0,0);
-const chunkManager = new ChunkManager();
-const renderer = new Renderer(canvas, player, chunkManager);
-
-let cam = { x:0, z:0, zoom:1.0 }; // zoom scales pixels/world
 
 const keys=new Set();
 addEventListener('keydown', e=>{ keys.add(e.code); if(["KeyQ","KeyE"].includes(e.code)) e.preventDefault(); });
 addEventListener('keyup', e=>{ keys.delete(e.code); });
-canvas.addEventListener('pointerdown', e=>{
-  const r=canvas.getBoundingClientRect();
-  const wx = cam.x + (e.clientX - r.left - W/2)/(cam.zoom) * Params.CELL;
-  const wz = cam.z + (e.clientY - r.top  - H/2)/(cam.zoom) * Params.CELL;
-  player.wp = { x:wx, z:wz };
-});
+
 document.getElementById('center').onclick = ()=>{ cam.x=player.x; cam.z=player.z; };
 document.getElementById('regen').onclick = ()=>{
   seed = (seed*1664525 + 1013904223)>>>0;
   reseedNoise(seed&0xffff);
-  CHUNKS.clear();
 };
 addEventListener('wheel', e=>{
   cam.zoom = clamp(cam.zoom * (e.deltaY<0? 1.1: 0.9), 0.5, 3.0);
@@ -658,9 +580,11 @@ function stepInput(dt){
 }
 
 // ===== Render world and player =====
-function render(){
-  renderer.render(seed);
-}
+let player=new Player(0,0);
+let world=new World();
+world.player=player;
+let cam={x:0, z:0, zoom:1.0};
+const CELLS_PER_CHUNK = 8;
 
 function dominant(w){ let best="Meadow", bw=-1; for(const [k,v] of Object.entries(w)){ if(v>bw){ bw=v; best=k; } } return best; }
 
@@ -670,7 +594,7 @@ function frame(){
   const now=performance.now()/1000, dt=Math.min(0.05, now-last); last=now;
   stepInput(dt);
   player.update(dt);
-  render();
+  world.tick()
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
