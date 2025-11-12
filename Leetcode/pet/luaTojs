@@ -1,103 +1,69 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chunk + Flora + Harvest</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0e14;color:#eaeefb;font-family:system-ui}
+  #game{display:block;width:100vw;height:100vh;touch-action:none}
+  #hud{position:fixed;left:8px;top:8px;white-space:pre;background:#1118;padding:.4rem .6rem;font-size:12px}
+  #help{position:fixed;right:8px;top:8px;background:#1118;padding:.4rem .6rem;font-size:12px;text-align:right}
+</style>
+<canvas id="game"></canvas>
+<pre id="hud"></pre>
+<pre id="help">WASD move • Click=move • Q/E zoom • F harvest
+Red/Blue/Yellow bushes give berries; they respawn</pre>
+<script>
+// ===== Canvas =====
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', resize, {passive:true}); resize();
+
+// ===== Utils / RNG / Noise =====
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
-class RNG{constructor(seed=123456789){this.s=(seed>>>0)||1;}next(){this.s=(1664525*this.s+1013904223)>>>0;return this.s;}float(){return (this.next()&0xffff)/0x10000;}int(a,b){return a + (this.next()%(b-a+1));}}
-// 2D simplex noise
+class RNG{constructor(seed=123456789){this.s=(seed>>>0)||1;}next(){this.s=(1664525*this.s+1013904223)>>>0;return this.s;}float(){return (this.next()&0xffff)/0x10000;}int(a,b){return a+(this.next()%(b-a+1));}}
 const F2=0.5*(Math.sqrt(3)-1), G2=(3-Math.sqrt(3))/6;
 const grad3=[[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
-let perm; function reseedNoise(seed=0){ const r=new RNG(seed||1); const p256=new Uint8Array(256); for(let i=0;i<256;i++) p256[i]=i; for(let i=255;i>0;i--){ const j=r.int(0,255); const t=p256[i]; p256[i]=p256[j]; p256[j]=t; } perm=new Uint8Array(512); for(let i=0;i<512;i++) perm[i]=p256[i&255]; } reseedNoise(1234);
-function dot2(g,x,y){ return g[0]*x+g[1]*y; }
+let perm;
+function reseedNoise(seed=0){
+  const r=new RNG(seed||1); const p256=new Uint8Array(256);
+  for(let i=0;i<256;i++) p256[i]=i;
+  for(let i=255;i>0;i--){ const j=r.int(0,255); const t=p256[i]; p256[i]=p256[j]; p256[j]=t; }
+  perm=new Uint8Array(512); for(let i=0;i<512;i++) perm[i]=p256[i&255];
+}
+reseedNoise(1234);
+const dot2=(g,x,y)=> g[0]*x+g[1]*y;
 function noise2(xin,yin){
   let n0=0,n1=0,n2=0;
-  const s=(xin+yin)*F2;
-  const i=Math.floor(xin+s), j=Math.floor(yin+s);
-  const t=(i+j)*G2, X0=i-t, Y0=j-t;
-  const x0=xin-X0, y0=yin-Y0;
+  const s=(xin+yin)*F2, i=Math.floor(xin+s), j=Math.floor(yin+s);
+  const t=(i+j)*G2, X0=i-t, Y0=j-t, x0=xin-X0, y0=yin-Y0;
   let i1,j1; if(x0>y0){ i1=1;j1=0; } else { i1=0;j1=1; }
-  const x1=x0-i1+G2, y1=y0-j1+G2;
-  const x2=x0-1+2*G2, y2=y0-1+2*G2;
+  const x1=x0-i1+G2, y1=y0-j1+G2, x2=x0-1+2*G2, y2=y0-1+2*G2;
   const ii=i&255, jj=j&255;
-  const gi0=perm[ii+perm[jj]]%8;
-  const gi1=perm[ii+i1+perm[jj+j1]]%8;
-  const gi2=perm[ii+1+perm[jj+1]]%8;
+  const gi0=perm[ii+perm[jj]]%8, gi1=perm[ii+i1+perm[jj+j1]]%8, gi2=perm[ii+1+perm[jj+1]]%8;
   let t0=0.5-x0*x0-y0*y0; if(t0>0){ t0*=t0; n0=t0*t0*dot2(grad3[gi0],x0,y0); }
   let t1=0.5-x1*x1-y1*y1; if(t1>0){ t1*=t1; n1=t1*t1*dot2(grad3[gi1],x1,y1); }
   let t2=0.5-x2*x2-y2*y2; if(t2>0){ t2*=t2; n2=t2*t2*dot2(grad3[gi2],x2,y2); }
   return 70*(n0+n1+n2);
 }
 
-// ===== World params and biome/heightfield =====
+// ===== World params and height =====
 const Params = { CELL:20, WATER_BASE:8, SEED:1335 };
+const CELLS_PER_CHUNK = 16;
 const SHAPE = {
   Taiga:{ amp:142, freq:0.018, rough:0.55, base: 2, water: 0 },
   Meadow:{amp:118, freq:0.006, rough:0.30, base: 0, water: 0 },
   Beach:{ amp:106, freq:0.010, rough:0.25, base:-3, water:-1},
   Swamp:{ amp:108, freq:0.004, rough:0.25, base:-1, water: 2 },
 };
-const BiomeNoise = {
-  biomeMix(x, z, seed) {
-    const gx = Math.floor(x / Params.CELL);
-    const gz = Math.floor(z / Params.CELL);
-    const fx = x / Params.CELL - gx;
-    const fz = z / Params.CELL - gz;
-
-    const w00 = weightsAtCell(gx, gz, seed);
-    const w10 = weightsAtCell(gx + 1, gz, seed);
-    const w01 = weightsAtCell(gx, gz + 1, seed);
-    const w11 = weightsAtCell(gx + 1, gz + 1, seed);
-
-    const out = {};
-    addScaled(out, w00, (1 - fx) * (1 - fz));
-    addScaled(out, w10, fx * (1 - fz));
-    addScaled(out, w01, (1 - fx) * fz);
-    addScaled(out, w11, fx * fz);
-
-    let s = 0;
-    for (const v of Object.values(out)) s += v;
-    if (s > 1e-6) {
-      for (const k in out) {
-        out[k] /= s;
-      }
-    }
-    return out;
-  },
-};
-
-const Heightfield = {
-  sample(x, z, seed) {
-    const w = BiomeNoise.biomeMix(x, z, seed);
-    let amp = 0, freq = 0, rough = 0, base = 0, water = 0;
-
-    for (const [name, wt] of Object.entries(w)) {
-      const p = SHAPE[name];
-      if (p) {
-        amp += wt * p.amp;
-        freq += wt * p.freq;
-        rough += wt * p.rough;
-        base += wt * p.base;
-        water += wt * p.water;
-      }
-    }
-
-    const n = fbm(x, z, seed, freq, rough);
-    const nh = clamp(0.5 + 0.5 * n, 0, 1);
-    const yG = base + amp * nh;
-    const yW = Params.WATER_BASE + water;
-
-    return { yG, yW, weights: w };
-  },
-};
 function weightsAtCell(ix,iz,seed){
   const x=(ix+0.5)*Params.CELL, z=(iz+0.5)*Params.CELL;
   const T = clamp(0.5 + 0.5*noise2(x*0.00035, z*0.00035 + seed*0.11), 0, 1);
   const W = clamp(0.5 + 0.5*noise2(x*0.00070, z*0.00070 + seed*0.37), 0, 1);
-  const wTaiga  = (1-T)*(1-W);
-  const wMeadow = T*(1-W);
-  const wSwamp  = (1-T)*W*0.7 + T*W*0.3;
-  const coast   = 0.5 + 0.5*noise2(x*0.00090, z*0.00090 + seed*0.59);
-  const near    = clamp(1 - Math.abs(coast - 0.5)*8, 0, 1);
-  const wBeach  = near*0.9;
-  const s = wTaiga+wMeadow+wSwamp+wBeach || 1;
+  const wTaiga  = (1-T)*(1-W), wMeadow = T*(1-W), wSwamp=(1-T)*W*0.7 + T*W*0.3;
+  const coast = 0.5 + 0.5*noise2(x*0.00090, z*0.00090 + seed*0.59);
+  const near  = clamp(1 - Math.abs(coast - 0.5)*8, 0, 1);
+  const wBeach= near*0.9; const s=wTaiga+wMeadow+wSwamp+wBeach || 1;
   return { Taiga:wTaiga/s, Meadow:wMeadow/s, Swamp:wSwamp/s, Beach:wBeach/s };
 }
 function biomeMix(x,z,seed){
@@ -105,29 +71,9 @@ function biomeMix(x,z,seed){
   const fx=x/Params.CELL-gx, fz=z/Params.CELL-gz;
   const w00=weightsAtCell(gx,gz,seed), w10=weightsAtCell(gx+1,gz,seed);
   const w01=weightsAtCell(gx,gz+1,seed), w11=weightsAtCell(gx+1,gz+1,seed);
-  const out={}; const add=(t,s)=>{ for(const k in t){ out[k]=(out[k]||0)+t[k]*s; } };
+  const out={}, add=(t,s)=>{ for(const k in t) out[k]=(out[k]||0)+t[k]*s; };
   add(w00,(1-fx)*(1-fz)); add(w10,fx*(1-fz)); add(w01,(1-fx)*fz); add(w11,fx*fz);
-  let s=0; for(const v of Object.values(out)) s+=v; for(const k in out) out[k]/=s||1;
-  return out;
-}
-function blend(components){
-  const out=[0,0,0]; let total=0;
-    for(const [wt,col] of components){
-        out[0]+=col[0]*wt; out[1]+=col[1]*wt; out[2]+=col[2]*wt; total+=wt;
-    }
-    if(total>0){
-        out[0]/=total; out[1]/=total; out[2]/=total;
-    }
-    return out;
-}
-function rgb(col){ return `rgb(${col[0]|0},${col[1]|0},${col[2]|0})`; }
-function mix(c1,c2,t){
-  const it=1-t;
-    return [
-        c1[0]*it + c2[0]*t,
-        c1[1]*it + c2[1]*t,
-        c1[2]*it + c2[2]*t,
-    ];
+  let s=0; for(const v of Object.values(out)) s+=v; for(const k in out) out[k]/=s||1; return out;
 }
 function fbm(x,z,seed,f,rough){
   let sum=0, amp=1; rough=clamp(rough,0.15,0.95);
@@ -139,127 +85,171 @@ function heightSample(x,z,seed){
   let amp=0,freq=0,rough=0,base=0,water=0;
   for(const [name,wt] of Object.entries(w)){
     const p=SHAPE[name]; if(!p) continue;
-    amp += wt*p.amp; freq += wt*p.freq; rough += wt*p.rough; base += wt*p.base; water += wt*p.water;
+    amp+=wt*p.amp; freq+=wt*p.freq; rough+=wt*p.rough; base+=wt*p.base; water+=wt*p.water;
   }
-  const n   = fbm(x,z,seed,freq,rough);
-  const nh  = clamp(0.5 + 0.5*n, 0, 1);
-  const yG  = base + amp*nh;
-  const yW  = Params.WATER_BASE + water;
-  return { yG, yW, weights:w };
+  const n=fbm(x,z,seed,freq,rough), nh=clamp(0.5+0.5*n,0,1);
+  return { yG: base + amp*nh, yW: Params.WATER_BASE + water, weights:w };
+}
+const rgb = a => `rgb(${a[0]|0},${a[1]|0},${a[2]|0})`;
+function dominant(w){ let best="Meadow", bw=-1; for(const [k,v] of Object.entries(w)) if(v>bw){bw=v;best=k;} return best; }
+
+// ===== Inventory =====
+class Inventory{
+  constructor(){ this.items=new Map(); }
+  add(id,n=1){ this.items.set(id,(this.items.get(id)||0)+n); }
+  count(id){ return this.items.get(id)||0; }
+  toString(){ return `R:${this.count('berry_red')} B:${this.count('berry_blue')} Y:${this.count('berry_yellow')}`; }
 }
 
-//non-roblox debug
-class World{
-    constructor(){
-        this.seed = 1335
-        this.renderer = new Renderer();
-        this.chunkManager = new ChunkManager();
-        this.player = null;
-    }
-    tick(){
-        if(this.player){
-            this.chunkTick(this.player);
-            this.chunkRender();
+// ===== Flora =====
+const FLORA_LOOT = {
+  BerryRed:    { item:'berry_red',    min:1, max:3, respawn:30 },
+  BerryBlue:   { item:'berry_blue',   min:1, max:2, respawn:35 },
+  BerryYellow: { item:'berry_yellow', min:1, max:2, respawn:40 },
+};
+const FLORA_STYLE = {
+  BerryRed:{r:3,fill:'#c33'}, BerryBlue:{r:3,fill:'#33c'}, BerryYellow:{r:3,fill:'#cc3'},
+  Oak:{r:4,fill:'#3f7a3f'}, Flowers:{r:3,fill:'#c77'},
+  Pine:{r:4,fill:'#2f5a2f'}, Fir:{r:4,fill:'#2b4f2b'},
+  Palm:{r:4,fill:'#4a7a4a'}, Cactus:{r:3,fill:'#2a7a4a'}, Seaweed:{r:3,fill:'#2a6a7a'},
+  Mangrove:{r:4,fill:'#3a603a'}, Reeds:{r:3,fill:'#a7a35a'}, Mushroom:{r:3,fill:'#a85'},
+};
+class FloraManager{
+  constructor(){ this.respawn=[]; }
+  optionsFor(biome){
+    return biome==="Meadow" ? ['Oak','Flowers','BerryRed']
+         : biome==="Taiga"  ? ['Pine','Fir','BerryBlue']
+         : biome==="Swamp"  ? ['Mangrove','Reeds','Mushroom','BerryYellow']
+         : biome==="Beach"  ? ['Palm','Cactus','Seaweed'] : [];
+  }
+  genForChunk(cx,cz,seed){
+    const out=[];
+    for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
+      for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
+        const wx=(cx*CELLS_PER_CHUNK+ix)*Params.CELL;
+        const wz=(cz*CELLS_PER_CHUNK+iz)*Params.CELL;
+        const h=heightSample(wx,wz,seed);
+        if(h.yG<h.yW) continue;
+        const opts=this.optionsFor(dominant(h.weights)); if(!opts.length) continue;
+        const rng=new RNG(((wx|0)*73856093)^((wz|0)*19349663)^(seed|0));
+        if(rng.float()<0.10){
+          const type=opts[rng.int(0,opts.length-1)];
+          const jx=(rng.float()-0.5)*0.6*Params.CELL, jz=(rng.float()-0.5)*0.6*Params.CELL;
+          out.push({type, x:wx+jx, z:wz+jz, harvestable: !!FLORA_LOOT[type]});
         }
+      }
     }
-    chunkTick(player){
-        const pcx = Math.floor(player.x / (Params.CELL * CELLS_PER_CHUNK));
-        const pcz = Math.floor(player.z / (Params.CELL * CELLS_PER_CHUNK));
-        for (let dz = -1; dz <= 1; dz++) {
-            for (let dx = -1; dx <= 1; dx++) {
-                const cx = pcx + dx;
-                const cz = pcz + dz;
-                if (!this.chunkManager.chunks.has(`${cx},${cz}`)){
-                    console.log(`Generating chunk ${cx}, ${cz}`);
-                    this.chunkManager.generateChunk(cx, cz);
-                } else {
-                    const chunk = this.chunkManager.loadChunk(cx, cz);
-                }
-            }
-        }
+    return out;
+  }
+  queueRespawn(cx,cz,seed,flora){
+    const loot=FLORA_LOOT[flora.type]; if(!loot) return;
+    this.respawn.push({cx,cz,seed,after:loot.respawn, flora});
+  }
+  tick(chunkMgr,dt){
+    for(const r of this.respawn) r.after-=dt;
+    const ready=this.respawn.filter(r=>r.after<=0);
+    this.respawn=this.respawn.filter(r=>r.after>0);
+    for(const r of ready){
+      const k=r.cx+","+r.cz, c=chunkMgr.chunks.get(k);
+      if(!c) continue;
+      const rng=new RNG(((r.flora.x|0)*1103515245)^((r.flora.z|0)*12345));
+      const f={...r.flora, x:r.flora.x+(rng.float()-0.5)*4, z:r.flora.z+(rng.float()-0.5)*4};
+      c.flora.push(f);
     }
-    chunkRender(){
-        //render chunks around player
-        this.renderer.render(this.chunkManager.activeChunks);
-    }
+  }
 }
-class Renderer{
-    constructor(){
-        this.cam = {x: 0, z: 0, zoom:0}
-    }
-    render(chunkdata){
-        //render chunkdata to canvas
-        for(const chunkKey of chunkdata){
-            const chunk = chunkdata.get(chunkKey);
-            console.log(chunk)
-            for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
-                for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
-                    const h = chunk.data.get(`${ix},${iz}`);
-                    const wx = (chunk.cx*CELLS_PER_CHUNK + ix)*Params.CELL;
-                    const wz = (chunk.cz*CELLS_PER_CHUNK + iz)*Params.CELL;
-                    const sx = (wx - this.cam.x) * (1 + this.cam.zoom) + canvas.width/2;
-                    const sz = (wz - this.cam.z) * (1 + this.cam.zoom) + canvas.height/2;
-                    const color = h.yG < h.yW ? [20, 60, 200] : [34, 139, 34];
-                    ctx.fillStyle = rgb(color);
-                    ctx.fillRect(sx, sz, Params.CELL*(1+this.cam.zoom), Params.CELL*(1+this.cam.zoom));
-                }
-            }
-        }
-    }
-}
+const FLORA = new FloraManager();
 
-class ChunkManager{
-    constructor(){
-        this.chunks = new Map();
-        this.activeChunks = new Set();
-    }
-    generateChunk(cx, cz){
-        const chunk = new Chunk(cx, cz);
-        chunk.generateChunk();
-        this.chunks.set(`${cx},${cz}`, chunk);
-    }
-    loadChunk(cx, cz){
-        const chunk = this.chunks.get(`${cx},${cz}`);
-    }
-    unloadChunk(cx, cz){
-        this.activeChunks.delete(`${cx},${cz}`);
-    }
-
-}
+// ===== Chunks =====
 class Chunk{
-    constructor(cx, cz){
-        this.cx = cx;
-        this.cz = cz;
-        this.data = new Map();
+  constructor(cx,cz){ this.cx=cx; this.cz=cz; this.data=new Map(); this.flora=[]; }
+  generate(){
+    for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
+      for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
+        const wx=(this.cx*CELLS_PER_CHUNK+ix)*Params.CELL;
+        const wz=(this.cz*CELLS_PER_CHUNK+iz)*Params.CELL;
+        this.data.set(ix+","+iz, heightSample(wx,wz,Params.SEED));
+      }
     }
-    generateChunk(){
-        for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
-            for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
-                const wx = (this.cx*CELLS_PER_CHUNK + ix)*Params.CELL;
-                const wz = (this.cz*CELLS_PER_CHUNK + iz)*Params.CELL;
-                const h = heightSample(wx, wz, Params.SEED);
-                this.data.set(`${ix},${iz}`, h);
-            }
-        }
+    this.flora = FLORA.genForChunk(this.cx, this.cz, Params.SEED);
+  }
+}
+class ChunkManager{
+  constructor(){ this.chunks=new Map(); this.active=new Set(); }
+  key(cx,cz){ return cx+","+cz; }
+  ensure(cx,cz){
+    const k=this.key(cx,cz);
+    if(!this.chunks.has(k)){ const c=new Chunk(cx,cz); c.generate(); this.chunks.set(k,c); }
+    this.active.add(k);
+  }
+  cullAround(pcx,pcz,r=2){
+    for(const k of Array.from(this.active)){
+      const [cx,cz]=k.split(",").map(Number);
+      if(Math.abs(cx-pcx)>r || Math.abs(cz-pcz)>r) this.active.delete(k);
     }
+  }
 }
 
-// ===== Player and camera =====
+// ===== Renderer =====
+class Renderer{
+  constructor(){ this.cam={x:0,z:0,zoom:1}; }
+  render(chunkMgr, player){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    const scale=this.cam.zoom;
+
+    for(const k of chunkMgr.active){
+      const chunk=chunkMgr.chunks.get(k);
+      if(!chunk) continue;
+
+      // tiles
+      for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
+        for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
+          const h=chunk.data.get(ix+","+iz);
+          const wx=(chunk.cx*CELLS_PER_CHUNK+ix)*Params.CELL;
+          const wz=(chunk.cz*CELLS_PER_CHUNK+iz)*Params.CELL;
+          const sx=Math.floor(canvas.width/2 + (wx - this.cam.x)*scale);
+          const sz=Math.floor(canvas.height/2 + (wz - this.cam.z)*scale);
+          const size=Math.ceil(Params.CELL*scale);
+          const isWater=h.yG<h.yW;
+          const biome=dominant(h.weights);
+          const base= biome==="Taiga"? [210,216,220] :
+                      biome==="Swamp"? [ 60, 70, 50] :
+                      biome==="Beach"? [220,205,150] : [86,140,80];
+          const col=isWater? [(base[0]*0.4+40),(base[1]*0.4+80),(base[2]*0.4+160)] : base;
+          ctx.fillStyle=rgb(col);
+          ctx.fillRect(sx,sz,size,size);
+        }
+      }
+      // flora
+      for(const f of chunk.flora){
+        const sx=Math.floor(canvas.width/2 + (f.x - this.cam.x)*scale);
+        const sz=Math.floor(canvas.height/2 + (f.z - this.cam.z)*scale);
+        if (sx<-8||sz<-8||sx>canvas.width+8||sz>canvas.height+8) continue;
+        const st=FLORA_STYLE[f.type] || {r:3,fill:'#6c6'};
+        const rr=Math.max(2, st.r*scale);
+        ctx.beginPath(); ctx.arc(sx,sz,rr,0,Math.PI*2);
+        ctx.fillStyle=st.fill; ctx.fill(); ctx.strokeStyle='#0006'; ctx.stroke();
+      }
+    }
+    // player
+    const psx=Math.floor(canvas.width/2 + (player.x - this.cam.x)*scale);
+    const psz=Math.floor(canvas.height/2 + (player.z - this.cam.z)*scale);
+    ctx.beginPath(); ctx.arc(psx,psz,Math.max(3, player.radius*scale),0,Math.PI*2);
+    ctx.fillStyle='red'; ctx.fill();
+
+    // HUD
+    document.getElementById('hud').textContent =
+      `x:${player.x.toFixed(1)} z:${player.z.toFixed(1)} zoom:${scale.toFixed(2)}\n` +
+      `inv ${player.inventory.toString()}`;
+  }
+}
+
+// ===== Player =====
 class Player{
   constructor(x=0,z=0){
-    this.x=x; this.z=z;
-    this.vx=0; this.vz=0;
-    this.speed=120; // world units per second
-    this.radius=8;
-    this.hp=100; 
-    this.wp=null;
-
-    //roblox user-made stuff. Everything else is handled by roblox (hopefully)
-    this.inventory = new Inventory();
-    this.roster = new Roster();
-    this.storedCreatures = new StoringCreature();
-    this.FireClient = 0 // pretend this sends commands to roblox server
-
+    this.x=x; this.z=z; this.vx=0; this.vz=0;
+    this.speed=40; this.radius=20; this.hp=100; this.wp=null;
+    this.inventory=new Inventory();
   }
   update(dt){
     if(this.wp){
@@ -268,302 +258,66 @@ class Player{
       if(L>1){ this.vx += (dx/L)*this.speed*0.8; this.vz += (dz/L)*this.speed*0.8; }
       if(L<6) this.wp=null;
     }
-    // integrate
     this.x += this.vx*dt; this.z += this.vz*dt;
-    // damping
     this.vx*=0.86; this.vz*=0.86;
   }
 }
-//Chunk creation, chunks with biomes and then water that affects the heightmap
-//Start spawning flora in the chunk:
-//cosmetic flora (trees, shrubs), then flora you can interact with (berry bushes).
-//Entities/Creatures exist. The player gains a UI to choose from bear, cat, or dog as their starter
-//after choosing, they gain a creature UI and a creature of their choice.
-//WorldEntities service listens for that player now and spawns biome-specific creatures around them
-class FloraManager {
-    constructor() {
-        this.buffer = [];
-    }
-    checkIfWater(x, z, seed) {
-        const h = heightSample(x, z, seed);
-        return h.yG < h.yW;
-    }
-    biomeFloraPicker(biome) {
-        const floraOptions = {
-            Taiga: ['Pine Tree', 'Fir Tree', 'Berry Bush'],
-            Meadow: ['Oak Tree', 'Flower Patch', 'Berry Bush'],
-            Beach: ['Palm Tree', 'Cactus', 'Seaweed'],
-            Swamp: ['Mangrove Tree', 'Reed Patch', 'Mushroom Cluster'],
-        };
-        return floraOptions[biome] || [];
-    }
-    spawnFloraInChunk(chunkX, chunkZ, seed) {
-        for (let iz = 0; iz < CELLS_PER_CHUNK; iz++) {
-            for (let ix = 0; ix < CELLS_PER_CHUNK; ix++) {
-                const wx = (chunkX * CELLS_PER_CHUNK + ix) * Params.CELL;
-                const wz = (chunkZ * CELLS_PER_CHUNK + iz) * Params.CELL;
-                if (this.checkIfWater(wx, wz, seed)) continue;
-                const h = heightSample(wx, wz, seed);
-                const dominantBiome = dominant(h.weights);
-                const floraOptions = this.biomeFloraPicker(dominantBiome);
-                if (floraOptions.length > 0) {
-                    const rng = new RNG((wx * 73856093) ^ (wz * 19349663) ^ seed);
-                    const spawnChance = 0.1; // 10% chance to spawn flora in a cell
-                    if (rng.float() < spawnChance) {
-                        const floraType = floraOptions[rng.int(0, floraOptions.length - 1)];
-                        this.buffer.push({ type: floraType, x: wx, z: wz });
-                    }
-                }
-            }
-        }
-    }
-    playerInteractWithFlora(playerX, playerZ, interactionRadius) {
-        this.buffer = this.buffer.filter(flora => {
-            const dx = flora.x - playerX;
-            const dz = flora.z - playerZ;
-            const distSq = dx * dx + dz * dz;
-            if (distSq <= interactionRadius * interactionRadius) {
-                console.log(`Player interacted with ${flora.type} at (${flora.x.toFixed(1)}, ${flora.z.toFixed(1)})`);
-                return false; // Remove flora after interaction
-            }
-            return true; // Keep flora if not interacted with
-        });
-    }
-    despawnFloraOutsideRadius(playerX, playerZ, despawnRadius) {
-        this.buffer = this.buffer.filter(flora => {
-            const dx = flora.x - playerX;
-            const dz = flora.z - playerZ;
-            const distSq = dx * dx + dz * dz;
-            return distSq <= despawnRadius * despawnRadius;
-        });
-    }
-}
-class CreatureManager {
-    constructor() {
-        this.entities = [];
-    }
-    spawnCreature(type, x, z) {
-        const entity = new Creature(type, x, z);
-        this.entities.push(entity);
-        return entity;
-    }
-    tickEntities(dt) {
-        for (const entity of this.entities) {
-            // Update entity logic here (movement, behavior, etc.)
-        }
-    }
-    despawnCreature(entity) {
-        const index = this.entities.indexOf(entity);
-        if (index !== -1) {
-            this.entities.splice(index, 1);
-        }
-    }
-}
-class RosterService { //validates wild to player-owned creature data
-    constructor() {
-    }
-    wildToPlayerCreature(wildCreature) {
-        const playerCreature = new PlayerCreature(wildCreature.type, wildCreature.x, wildCreature.z);
-        // Copy relevant data from wildCreature to playerCreature
-        return playerCreature;
-    }
-}
-class Roster {
-    constructor(){
-        this.creatures = [];
-    }
 
-}
-class StoringCreature{
-    constructor(creature, storageData){
-        this.creature = creature;
-        this.storageData = storageData; // e.g., health, experience, etc.
-    }
-}
-class Inventory{
-    constructor(){
-        this.items = {};
-    }
-}
-class globalAbilityFunctions{
-    constructor(dict){
-        this.dict = dict;
-    }
-}
-class WorldEntityManager{
-    constructor(type, x, z){
-        this.type=type;
-        this.x=x; this.z=z;
-        this.life = 100;
-        this.entityState={};
-    }
-    createTargetedProjectile(abilityName, targetX, targetZ){
-        // Logic to create and launch a projectile towards (targetX, targetZ)
-    }
-    createFreeProjectile(abilityName, directionX, directionZ){
-        // Logic to create and launch a projectile in the direction (directionX, directionZ)
-    }
-    createFreeAreaEffect(abilityName, centerX, centerZ, radius){
-        // Logic to create an area effect at (centerX, centerZ) with the specified radius
-    }
-    createTargetedAreaEffect(abilityName, targetX, targetZ, radius){
-        // Logic to create an area effect centered on a target at (targetX, targetZ) with the specified radius
-    }
-    tick(dt){
-        // Update entity logic here (movement, behavior, etc.)
-    }
-}
-class Projectile{
-    constructor(type, x, z, directionX, directionZ, speed){
-        this.type=type;
-        this.x=x; this.z=z;
-        this.directionX=directionX; this.directionZ=directionZ;
-        this.speed=speed;
-        this.followTarget=null;
-    }
-}
-class AreaEffect{
-    constructor(type, centerX, centerZ, radius, duration){
-        this.type=type;
-        this.centerX=centerX; this.centerZ=centerZ;
-        this.radius=radius;
-        this.duration=duration;
-        this.followTarget=null;
-    }
-}
-class AbilitySet{
-    constructor(abilities){
-        this.abilities = abilities; // abilities is a dictionary of abilityName -> abilityFunction
-    }
-    useAbility(abilityName, user, target){
-        const abilityFunc = this.abilities[abilityName];
-        if(abilityFunc){
-            abilityFunc(user, target);
-        }
-    }
-    requestAbilityUse(abilityName, user, target){
-        // In a real Roblox environment, this would send a request to the server
-        user.FireClient(abilityName, target);
-        if(!user.cooldowns.isOnCooldown(abilityName)){
-            this.useAbility(abilityName, user, target);
-        }
-    }
-}
-class Cooldowns{
-    constructor(){
-        this.cooldowns = {}; // abilityName -> timeRemaining
-    }
-    setCooldown(abilityName, duration){
-        this.cooldowns[abilityName] = duration;
-    }
-    tick(dt){
-        for(const abilityName in this.cooldowns){
-            this.cooldowns[abilityName] -= dt;
-            if(this.cooldowns[abilityName] <= 0){
-                delete this.cooldowns[abilityName];
-            }
-        }
-    }
-    isOnCooldown(abilityName){
-        return this.cooldowns.hasOwnProperty(abilityName);
-    }
-}
-class StatsSet{
-    constructor(stats){
-        this.baseStats = stats; // baseStats is a dictionary of statName -> baseValue
-        this.extraStats = {};
-        this.finalStats = {};
-    }
-    recalculateStats(){}
-}
-class CreatureBrain{
-    constructor(entity){}
-}
-class StatusEffects {
-  constructor() {
-    this.effects = []; // Array of active effects
+// ===== World =====
+class World{
+  constructor(){
+    this.renderer=new Renderer();
+    this.chunks=new ChunkManager();
+    this.player=null;
   }
-
-  addEffect(effect) {
-    this.effects.push(effect);
-  }
-
-  tick(dt) {
-    this.effects = this.effects.filter(effect => {
-      effect.duration -= dt;
-      if (effect.duration <= 0) {
-        if (effect.onExpire) effect.onExpire();
-        return false; // Remove expired effect
-      }
-      if (effect.onTick) effect.onTick(dt);
-      return true; // Keep active effect
-    });
+  tick(dt){
+    if(!this.player) return;
+    const pcx=Math.floor(this.player.x/(Params.CELL*CELLS_PER_CHUNK));
+    const pcz=Math.floor(this.player.z/(Params.CELL*CELLS_PER_CHUNK));
+    for(let dz=-1; dz<=1; dz++) for(let dx=-1; dx<=1; dx++) this.chunks.ensure(pcx+dx, pcz+dz);
+    this.chunks.cullAround(pcx,pcz,2);
+    FLORA.tick(this.chunks, dt);
+    const cam=this.renderer.cam;
+    cam.x += (this.player.x - cam.x)*0.15;
+    cam.z += (this.player.z - cam.z)*0.15;
+    this.renderer.render(this.chunks, this.player);
   }
 }
-class Creature{
-    constructor(type, x, z){
-        this.type=type;
-        this.x=x; this.z=z;
-        this.entityState={};
-        this.requests = {vel: {x:0, z:0}, basicAttack:false};
-        
-        // Additional properties like health, behavior state, etc. can be added here
-        this.cooldowns = new Cooldowns();
-        this.abilities = new AbilitySet({});
-        this.stats = new StatsSet({});
-        this.brain = new CreatureBrain(this);
-        this.statusEffects = new StatusEffects(); // Add status effects manager
-    }
-    tick(dt) {
-        this.statusEffects.tick(dt); // Process status effects
-        this.cooldowns.tick(dt); // Process cooldowns
-        // ...other entity logic...
-    }
-}
-class PlayerCreature extends Creature{
-    constructor(type, x, z){
-        super(type, x, z);
-        this.activeRoster = false;
-        this.autonomy = true;
-        this.commandQueue = [];
-        this.capturable = false;
-        this.inPlayerRoster = true;
-        this.inPlayerRadius = false;
-    }
-}
-class WildCreature extends Creature{
-    constructor(type, x, z){
-        super(type, x, z);
-        this.autonomy = true;
-        this.capturable = true;
-        this.inPlayerRoster = false;
-        this.inPlayerRadius = false;
-    }
-}
 
-
-//things sent to the HUD:
-//if starting out: Choose starter HUD
-//Options to request more or less chunks seen, etc
-//After picking creature: Creature stat HUD
-//Creature Abilities and Cooldowns.
-
-
-// ===== Canvas, input, main loop =====
-
+// ===== Input =====
 const keys=new Set();
-addEventListener('keydown', e=>{ keys.add(e.code); if(["KeyQ","KeyE"].includes(e.code)) e.preventDefault(); });
+addEventListener('keydown', e=>{
+  keys.add(e.code);
+  if(["KeyQ","KeyE"].includes(e.code)) e.preventDefault();
+
+  // harvest
+  if (e.code === 'KeyF') {
+    const px = world.player.x, pz = world.player.z, r2 = (world.player.radius*1.1)**2;
+    for (const k of world.chunks.active){
+      const c = world.chunks.chunks.get(k); if(!c) continue;
+      const keep=[];
+      for (const f of c.flora){
+        const dx=f.x-px, dz=f.z-pz;
+        if (dx*dx+dz*dz <= r2 && f.harvestable){
+          const loot=FLORA_LOOT[f.type];
+          const rng=new RNG(((f.x|0)*1103515245)^((f.z|0)*12345));
+          const amt=loot.min + rng.int(0, loot.max - loot.min);
+          world.player.inventory.add(loot.item, amt);
+          FLORA.queueRespawn(c.cx, c.cz, Params.SEED, f);
+        } else keep.push(f);
+      }
+      c.flora=keep;
+    }
+  }
+});
 addEventListener('keyup', e=>{ keys.delete(e.code); });
-
-document.getElementById('center').onclick = ()=>{ cam.x=player.x; cam.z=player.z; };
-document.getElementById('regen').onclick = ()=>{
-  seed = (seed*1664525 + 1013904223)>>>0;
-  reseedNoise(seed&0xffff);
-};
-addEventListener('wheel', e=>{
-  cam.zoom = clamp(cam.zoom * (e.deltaY<0? 1.1: 0.9), 0.5, 3.0);
-}, {passive:true});
-
+canvas.addEventListener('pointerdown', e=>{
+  const r=canvas.getBoundingClientRect();
+  const cam=world.renderer.cam, scale=cam.zoom;
+  const wx = cam.x + (e.clientX - r.left - canvas.width/2)/scale;
+  const wz = cam.z + (e.clientY - r.top  - canvas.height/2)/scale;
+  player.wp = {x:wx, z:wz};
+});
 function stepInput(dt){
   let ax=0, az=0;
   if(keys.has('KeyW')) az -= 1;
@@ -574,27 +328,25 @@ function stepInput(dt){
     const L=Math.hypot(ax,az)||1; ax/=L; az/=L;
     const sp = player.speed * (keys.has('ShiftLeft')? 1.8:1.0);
     player.vx += ax*sp; player.vz += az*sp;
+    player.wp=null;
   }
-  if(keys.has('KeyQ')) cam.zoom = clamp(cam.zoom*0.98, 0.5, 3.0);
-  if(keys.has('KeyE')) cam.zoom = clamp(cam.zoom*1.02, 0.5, 3.0);
+  if(keys.has('KeyQ')) world.renderer.cam.zoom = clamp(world.renderer.cam.zoom * 0.95, 0.1, 3.0);
+  if(keys.has('KeyE')) world.renderer.cam.zoom = clamp(world.renderer.cam.zoom * 1.05, 0.1, 3.0);
 }
 
-// ===== Render world and player =====
-let player=new Player(0,0);
-let world=new World();
+// ===== Boot =====
+const world=new World();
+const player=new Player(0,0);
 world.player=player;
-let cam={x:0, z:0, zoom:1.0};
-const CELLS_PER_CHUNK = 8;
 
-function dominant(w){ let best="Meadow", bw=-1; for(const [k,v] of Object.entries(w)){ if(v>bw){ bw=v; best=k; } } return best; }
-
-// ===== Main loop =====
 let last=performance.now()/1000;
 function frame(){
   const now=performance.now()/1000, dt=Math.min(0.05, now-last); last=now;
   stepInput(dt);
   player.update(dt);
-  world.tick()
+  world.tick(dt);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+</script>
+</html>
