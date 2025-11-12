@@ -48,13 +48,13 @@ function noise2(xin,yin){
 }
 
 // ===== World params and height =====
-const Params = { CELL:20, WATER_BASE:8, SEED:1335 };
-const CELLS_PER_CHUNK = 16;
+const Params = { CELL:10, WATER_BASE:10, SEED:1335 };
+const CELLS_PER_CHUNK = 10;
 const SHAPE = {
   Taiga:{ amp:142, freq:0.018, rough:0.55, base: 2, water: 0 },
-  Meadow:{amp:118, freq:0.006, rough:0.30, base: 0, water: 0 },
-  Beach:{ amp:106, freq:0.010, rough:0.25, base:-3, water:-1},
-  Swamp:{ amp:108, freq:0.004, rough:0.25, base:-1, water: 2 },
+  Meadow:{amp:18, freq:0.006, rough:0.30, base: 0, water: 0 },
+  Beach:{ amp:16, freq:0.010, rough:0.25, base:-3, water:-1},
+  Swamp:{ amp:18, freq:0.004, rough:0.25, base:-1, water: 2 },
 };
 function weightsAtCell(ix,iz,seed){
   const x=(ix+0.5)*Params.CELL, z=(iz+0.5)*Params.CELL;
@@ -124,6 +124,7 @@ class FloraManager{
   }
   genForChunk(cx,cz,seed){
     const out=[];
+    setInterval(() => {
     for(let iz=0; iz<CELLS_PER_CHUNK; iz++){
       for(let ix=0; ix<CELLS_PER_CHUNK; ix++){
         const wx=(cx*CELLS_PER_CHUNK+ix)*Params.CELL;
@@ -139,7 +140,9 @@ class FloraManager{
         }
       }
     }
+    }, 500);
     return out;
+  
   }
   queueRespawn(cx,cz,seed,flora){
     const loot=FLORA_LOOT[flora.type]; if(!loot) return;
@@ -248,7 +251,7 @@ class Renderer{
 class Player{
   constructor(x=0,z=0){
     this.x=x; this.z=z; this.vx=0; this.vz=0;
-    this.speed=40; this.radius=20; this.hp=100; this.wp=null;
+    this.speed=20; this.radius=10; this.hp=100; this.wp=null;
     this.inventory=new Inventory();
   }
   update(dt){
@@ -269,18 +272,135 @@ class World{
     this.renderer=new Renderer();
     this.chunks=new ChunkManager();
     this.player=null;
+    this.cDist=1;
   }
   tick(dt){
     if(!this.player) return;
     const pcx=Math.floor(this.player.x/(Params.CELL*CELLS_PER_CHUNK));
     const pcz=Math.floor(this.player.z/(Params.CELL*CELLS_PER_CHUNK));
-    for(let dz=-1; dz<=1; dz++) for(let dx=-1; dx<=1; dx++) this.chunks.ensure(pcx+dx, pcz+dz);
-    this.chunks.cullAround(pcx,pcz,2);
+    for(let dz=-this.cDist; dz<=this.cDist; dz++) for(let dx=-this.cDist; dx<=this.cDist; dx++) this.chunks.ensure(pcx+dx, pcz+dz);
+    this.chunks.cullAround(pcx,pcz,this.cdist);
     FLORA.tick(this.chunks, dt);
     const cam=this.renderer.cam;
     cam.x += (this.player.x - cam.x)*0.15;
     cam.z += (this.player.z - cam.z)*0.15;
     this.renderer.render(this.chunks, this.player);
+  }
+}
+//Starter HUD: pick an entity.
+const exampleBaseStats = {HP: 10, pAtk: 10, eAtk: 10, def: 10, res: 10, speed: 10, castSpd: 1};
+const exampleInnateVariation = {minAdded: -5, maxAdded: 5}
+const exampleComposites = {inner: 'organic', outer: 'organic'}
+const solid = 'solid', liquid = 'liquid';
+const composites = {
+    stone:       {name: "stone", matter: solid,  tough: 0.30, hard: 0.8, energy: 0.0, elastic: 0.0, tempBaseline: 0.5, chemResist: 0.6,
+        porosity: 0.0,  thermCond: 0.05, electCond: 0.1},
+    crystalline: {name: "crystalline", matter: solid,  tough: 0.15, hard: 0.9, energy: 0.0, elastic: 0.0, tempBaseline: 0.5, chemResist: 0.5,
+        porosity: 0.0,  thermCond: 0.05, electCond: 0.5},
+    metal:       {name: "metal", matter: solid,  tough: 0.80, hard: 0.7, energy: 0.0, elastic: 0.2, tempBaseline: 0.5, chemResist: 0.55,
+        porosity: 0.05,  thermCond: 1.0, electCond: 0.95},
+    organicAnimal:{name: "organicAnimal", matter: solid, tough: 0.60, hard: 0.3, energy: 0.2, elastic: 0.7, tempBaseline: 0.5, chemResist: 0.20,
+        porosity: 0.5,  thermCond: 0.4, electCond: 0.45},
+    water:       {name: "water", matter: liquid, tough: 0.00, hard: 0.0, energy: 0.5, elastic: 1.0, tempBaseline: 0.45, chemResist: 0,
+        porosity: 0.2,  thermCond: 0.9, electCond: 0.9},
+    lava:        {name: "lava", matter: liquid, tough: 0.60, hard: 0.2, energy: 0.7, elastic: 0.3, tempBaseline: 1.0, chemResist: .3,
+        porosity: 0.4,  thermCond: 0.1, electCond: 0.1},
+  
+}
+const damageDefinitions = {
+  slice: {name: "Slice", effectiveness: [ {elastic: 1.0} ], ineffectiveness: [ {hard: 0.5}, {tough: 0.7} ]},
+  smash: {name: "Smash", effectiveness: [ {hard: 1.0} ], ineffectiveness: [ {elastic: 0.5}, {tough: 0.7} ]},
+  fire:  {name: "Fire", effectiveness: [ {energy: 1.0} ], ineffectiveness: [ {chemResist: 0.6} ]},
+  water: {name: "Water", effectiveness: [ {porosity: 1.0} ], ineffectiveness: [ {chemResist: 0.5} ]},
+}
+const moveDefinitions = {
+    scratch: {name: "Scratch", rangeType: "melee", dmgType: "slice", basePAtk: 5, baseEAtk: 0, pAtkScale:0.5, eAtkScale:0},
+    headbutt: {name: "Headbutt", rangeType: "melee", dmgType: "smash", basePAtk: 5, baseEAtk: 0, pAtkScale:0.5, eAtkScale:0},
+    blaze: {name: "Blaze", rangeType: "area", dmgType: "fire", basePAtk: 0, baseEAtk: 8, pAtkScale:0, eAtkScale:0.7},
+    scald: {name: "Scald", rangeType: "projectile", dmgType: "water", basePAtk: 0, baseEAtk: 6, pAtkScale:0, eAtkScale:0.5},
+}
+
+const exampleStartingMoves = {
+  feline: ["scratch", "headbutt", "blaze", "scald"]
+}
+const families = {
+  feline: {name: "feline",baseMoves: exampleStartingMoves.feline, preferredComposite: "organicAnimal"}
+}
+const species = {
+  cat: {name: "cat", baseStats: exampleBaseStats, composites: exampleComposites, bornVariation: exampleInnateVariation,
+    family: "feline",
+  }
+}
+class Entity {
+  constructor(speciesId, pos) {
+    const spec = species[speciesId];
+    this.species = spec;
+    this.family = families[spec.family];
+    this.composites = {
+      inner: composites[spec.composites.inner],
+      outer: composites[spec.composites.outer],
+    };
+    this.stats = {...spec.baseStats};
+    this.effects = []
+    this.basicAtk = null || exampleStartingMoves.scratch;
+    this.moves = this.family.baseMoves.map(moveId => moveDefinitions[moveId]);
+    this.brain = null;
+    this.pos = pos;
+    this.requests = {vel: {x:0,y:0}, ability: {}, basic: false}
+  }
+}
+class PlayerCreature extends Entity {
+  constructor(speciesId, pos) {
+    super(speciesId, pos);
+    this.playerCommands = {moveDir: {x:0,y:0}, useBasic: false, useAbility: null};
+    this.autoMode = false;
+  }
+}
+
+
+//HUD
+class HUD {
+  constructor(world, player) {
+    this.world = world;
+    this.player = player;
+    this.scenes = {};
+    this.hudElement = document.getElementById('hud');
+  }
+  displayButtons(buttons) {
+    let buttonHTML = '';
+    buttons.forEach(button => {
+      buttonHTML += `<button onclick="${button.onClick}">${button.label}</button> `;
+    });
+    this.hudElement.innerHTML += `\n${buttonHTML}`;
+  }
+  displayFrameInfo() {
+    const cam = this.world.renderer.cam;
+    this.hudElement.textContent =
+      `x:${this.player.x.toFixed(1)} z:${this.player.z.toFixed(1)} zoom:${cam.zoom.toFixed(2)}\n` +
+      `inv ${this.player.inventory.toString()}`;
+  }
+  enterScene(sceneId) {
+    if (this.scenes[sceneId] && this.scenes[sceneId].onEnter) {
+      this.scenes[sceneId].onEnter();
+    }
+  }
+  chooseStarterScene() {
+    return {
+      onEnter: () => {
+        this.hudElement.innerHTML = 'Choose your starter:<br>';
+        const starters = [
+          {label: 'Cat', onClick: 'hud.startGame("cat")'},
+          {label: 'Dog', onClick: 'hud.startGame("dog")'},
+          {label: 'Rabbit', onClick: 'hud.startGame("rabbit")'},
+        ];
+        this.displayButtons(starters);
+      }
+    };
+  }
+  listenersForScene(sceneId) {
+    if (this.scenes[sceneId] && this.scenes[sceneId].listeners) {
+      this.scenes[sceneId].listeners();
+    }
   }
 }
 
@@ -338,7 +458,9 @@ function stepInput(dt){
 const world=new World();
 const player=new Player(0,0);
 world.player=player;
-
+// HUD
+const hud = new HUD(world, player);
+hud.scenes['chooseStarter'] = hud.chooseStarterScene();
 let last=performance.now()/1000;
 function frame(){
   const now=performance.now()/1000, dt=Math.min(0.05, now-last); last=now;
