@@ -1,0 +1,404 @@
+const canvas = document.getElementById("canvas");
+const ctx    = canvas.getContext("2d");
+
+// -----------------------------------------------------
+// Input
+// -----------------------------------------------------
+const keys = {};
+window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+window.addEventListener("keyup",   e => keys[e.key.toLowerCase()] = false);
+
+// -----------------------------------------------------
+// TimeManager  // ticks everything in a specific order
+// -----------------------------------------------------
+class TimeManager {
+    constructor() {
+        this.systems = []; // anything with update(dt)
+    }
+    add(system) {
+        this.systems.push(system);
+    }
+    remove(system) {
+        this.systems = this.systems.filter(s => s !== system);
+    }
+    update(dt) {
+        for (const s of this.systems) {
+            if (s && typeof s.update === "function") {
+                s.update(dt);
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------
+// AbilityManager  // handles all abilities in FIFO
+// -----------------------------------------------------
+class AbilityManager {
+    constructor(world) {
+        this.world = world;
+        this.queue = []; // [{ caster, target, data, ... }]
+    }
+    enqueue(ability) {
+        this.queue.push(ability);
+    }
+    update(dt) {
+        // process abilities in order
+        for (let i = 0; i < this.queue.length; ) {
+            const a = this.queue[i];
+            // ability.update returns true if still active, false if done
+            const alive = a.update ? a.update(dt, this.world) : false;
+            if (!alive) this.queue.splice(i, 1);
+            else i++;
+        }
+    }
+}
+
+// -----------------------------------------------------
+// WorldEntity  // base for everything in the arena
+// -----------------------------------------------------
+let NEXT_ID = 1;
+
+class WorldEntity {
+    constructor(world, x = 0, z = 0) {
+        this.id    = NEXT_ID++;
+        this.world = world;
+        this.x     = x;
+        this.z     = z;
+        this.vx    = 0;
+        this.vz    = 0;
+        this.alive = true;
+    }
+    update(dt /*, world */) {
+        this.x += this.vx * dt;
+        this.z += this.vz * dt;
+    }
+    draw(ctx, camera) {
+        // override in subclasses
+    }
+}
+
+// -----------------------------------------------------
+// AreaEffect  // stuff like AOE zones, DoT areas, etc.
+// Projectile  // bullets, projectiles
+// Collidables // things that can collide
+// -----------------------------------------------------
+class AreaEffect extends WorldEntity {
+    // extra fields later: radius, duration, effectType, etc.
+}
+
+class Projectile extends WorldEntity {
+    constructor(world, x, z) {
+        super(world, x, z);
+        this.lifetime = 1.5; // seconds
+        this.radius   = 4;
+    }
+    update(dt, world) {
+        super.update(dt, world);
+        this.lifetime -= dt;
+        if (this.lifetime <= 0) this.alive = false;
+        // TODO: collision with Collidables
+    }
+    draw(ctx, camera) {
+        const { sx, sz } = camera.worldToScreen(this.x, this.z);
+        ctx.fillStyle = "yellow";
+        ctx.beginPath();
+        ctx.arc(sx, sz, this.radius * camera.zoom * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+class Collidables extends WorldEntity {
+    constructor(world, x, z, radius = 8) {
+        super(world, x, z);
+        this.radius = radius;
+    }
+    // TODO: add collision helpers later
+}
+
+// -----------------------------------------------------
+// Space  // stand-in for chunk stuff / arena space
+// -----------------------------------------------------
+class Space {
+    constructor(width, height) {
+        this.width  = width;
+        this.height = height;
+    }
+    clamp(x, z) {
+        return {
+            x: Math.max(0, Math.min(this.width,  x)),
+            z: Math.max(0, Math.min(this.height, z))
+        };
+    }
+    randomPoint() {
+        return {
+            x: Math.random() * this.width,
+            z: Math.random() * this.height
+        };
+    }
+}
+
+// -----------------------------------------------------
+// Camera
+// -----------------------------------------------------
+class Camera {
+    constructor() {
+        this.x      = 0;
+        this.z      = 0;
+        this.zoom   = 3;
+        this.target = null;
+    }
+    follow(entity) {
+        this.target = entity;
+    }
+    update(dt) {
+        if (!this.target) return;
+        const lerp = 10 * dt;
+        this.x += (this.target.x - this.x) * lerp;
+        this.z += (this.target.z - this.z) * lerp;
+    }
+    worldToScreen(x, z) {
+        return {
+            sx: (x - this.x) * this.zoom + canvas.width  / 2,
+            sz: (z - this.z) * this.zoom + canvas.height / 2
+        };
+    }
+}
+
+// -----------------------------------------------------
+// World  // pretend Workspace
+// -----------------------------------------------------
+class World {
+    constructor(space) {
+        this.space       = space;
+        this.entities    = [];
+        this.projectiles = [];
+        this.areaEffects = [];
+    }
+    addEntity(e)      { this.entities.push(e);      return e; }
+    addProjectile(p)  { this.projectiles.push(p);   return p; }
+    addAreaEffect(a)  { this.areaEffects.push(a);   return a; }
+
+    update(dt) {
+        this.entities.forEach(e    => e.update(dt, this));
+        this.projectiles.forEach(p => p.update(dt, this));
+        this.areaEffects.forEach(a => a.update(dt, this));
+
+        this.entities    = this.entities.filter(e => e.alive);
+        this.projectiles = this.projectiles.filter(p => p.alive);
+        this.areaEffects = this.areaEffects.filter(a => a.alive);
+    }
+
+    draw(ctx, camera) {
+        // background
+        ctx.fillStyle = "#6aa56a";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // draw things
+        this.areaEffects.forEach(a => a.draw(ctx, camera));
+        this.entities.forEach(e    => e.draw(ctx, camera));
+        this.projectiles.forEach(p => p.draw(ctx, camera));
+    }
+}
+
+// -----------------------------------------------------
+// Player  // pretend base Roblox player
+// -----------------------------------------------------
+class Player extends Collidables {
+    constructor(world, x, z) {
+        super(world, x, z, 10);
+        this.speed         = 80;
+        this.roster        = []; // RosterEntity list
+        this.activeCreature = null;
+    }
+
+    update(dt, world) {
+        let dx = 0, dz = 0;
+        if (keys["w"]) dz -= 1;
+        if (keys["s"]) dz += 1;
+        if (keys["a"]) dx -= 1;
+        if (keys["d"]) dx += 1;
+
+        const len = Math.hypot(dx, dz) || 1;
+        this.vx = (dx / len) * this.speed;
+        this.vz = (dz / len) * this.speed;
+
+        super.update(dt, world);
+
+        const clamped = world.space.clamp(this.x, this.z);
+        this.x = clamped.x;
+        this.z = clamped.z;
+    }
+
+    draw(ctx, camera) {
+        const { sx, sz } = camera.worldToScreen(this.x, this.z);
+        ctx.fillStyle = "#222";
+        ctx.fillRect(sx - 6, sz - 6, 12, 12);
+    }
+}
+
+// -----------------------------------------------------
+// Entity  // creatures
+// -----------------------------------------------------
+class Entity extends Collidables {
+    constructor(world, species, x, z) {
+        super(world, x, z, 8);
+        this.species = species;     // reference to SpeciesDB entry
+        this.hp      = species.baseHP;
+        this.attack  = species.baseATK;
+        this.speed   = species.baseSPD;
+        this.brain   = null;        // EntityBrain instance
+        this.state   = "idle";      // idle / moving / attacking / etc.
+    }
+
+    update(dt, world) {
+        if (this.brain) {
+            this.brain.update(dt, world);
+        }
+        super.update(dt, world);
+    }
+
+    draw(ctx, camera) {
+        const { sx, sz } = camera.worldToScreen(this.x, this.z);
+        ctx.fillStyle = this.species.color || "#f0f";
+        ctx.fillRect(sx - 5, sz - 5, 10, 10);
+    }
+}
+
+// -----------------------------------------------------
+// EntityBrain  // AI bot for creatures
+// -----------------------------------------------------
+class EntityBrain {
+    constructor(entity) {
+        this.entity = entity;
+        // TODO: state machine / behavior tree data
+    }
+
+    update(dt, world) {
+        // TODO: AI logic
+        // Example: simple jitter idle
+        // this.entity.vx += (Math.random() - 0.5) * 5;
+        // this.entity.vz += (Math.random() - 0.5) * 5;
+    }
+}
+
+// -----------------------------------------------------
+// RosterEntity  // creatures that player can own & command
+// -----------------------------------------------------
+class RosterEntity extends Entity {
+    constructor(world, species, owner, x, z) {
+        super(world, species, x, z);
+        this.owner         = owner; // Player
+        this.followDistance = 20;
+    }
+
+    update(dt, world) {
+        // simple follow-owner behavior
+        if (this.owner) {
+            const dx   = this.owner.x - this.x;
+            const dz   = this.owner.z - this.z;
+            const dist = Math.hypot(dx, dz);
+            if (dist > this.followDistance) {
+                const s  = this.speed;
+                this.vx  = (dx / dist) * s;
+                this.vz  = (dz / dist) * s;
+            } else {
+                this.vx = this.vz = 0;
+            }
+        }
+        super.update(dt, world);
+    }
+}
+
+// -----------------------------------------------------
+// WildEntity  // wild catchable creatures
+// -----------------------------------------------------
+class WildEntity extends Entity {
+    constructor(world, species, x, z) {
+        super(world, species, x, z);
+        this.spawnX     = x;
+        this.spawnZ     = z;
+        this.aggroRange = 40;
+        this.lootTable  = []; // TODO: drops, morph items, etc.
+    }
+    // TODO: wander, detect player, start battle, etc.
+}
+
+// -----------------------------------------------------
+// BossEntity  // boss creatures, usually in base morph stage
+// -----------------------------------------------------
+class BossEntity extends Entity {
+    constructor(world, species, x, z) {
+        super(world, species, x, z);
+        this.phase  = 1;
+        this.enrage = false;
+        // TODO: scripted patterns
+    }
+}
+
+// -----------------------------------------------------
+// Species definitions (base stats by family/species)
+// -----------------------------------------------------
+const SpeciesDB = {
+    FlareCub: {
+        name:    "FlareCub",
+        baseHP:  40,
+        baseATK: 10,
+        baseSPD: 30,
+        color:   "#f6863a"
+    },
+    AquaSprout: {
+        name:    "AquaSprout",
+        baseHP:  55,
+        baseATK:  8,
+        baseSPD: 24,
+        color:   "#3a8df6"
+    }
+    // TODO: add more families, morph stages, etc.
+};
+
+// -----------------------------------------------------
+// Simple game wiring
+// -----------------------------------------------------
+const space      = new Space(300, 300);
+const world      = new World(space);
+const camera     = new Camera();
+const abilities  = new AbilityManager(world);
+const time       = new TimeManager();
+
+// Player
+const player = world.addEntity(new Player(world, 150, 150));
+camera.follow(player);
+
+// Example owned creature
+const pet = world.addEntity(
+    new RosterEntity(world, SpeciesDB.FlareCub, player, 140, 150)
+);
+player.roster.push(pet);
+
+// Example wild creatures
+world.addEntity(new WildEntity(world, SpeciesDB.AquaSprout, 50, 80));
+world.addEntity(new WildEntity(world, SpeciesDB.AquaSprout, 230, 220));
+
+// Hook world + abilities + camera into TimeManager
+time.add({
+    update(dt) {
+        world.update(dt);
+        abilities.update(dt);
+        camera.update(dt);
+        world.draw(ctx, camera);
+    }
+});
+
+// -----------------------------------------------------
+// Main loop
+// -----------------------------------------------------
+let last = performance.now();
+
+function frame(now) {
+    const dt = Math.min((now - last) / 1000, 0.033);
+    last = now;
+    time.update(dt);
+    requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
