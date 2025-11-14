@@ -175,12 +175,18 @@ class World {
         this.entities    = [];
         this.projectiles = [];
         this.areaEffects = [];
+        this.spawnField = null;
     }
     addEntity(e)      { this.entities.push(e);      return e; }
     addProjectile(p)  { this.projectiles.push(p);   return p; }
     addAreaEffect(a)  { this.areaEffects.push(a);   return a; }
-
+   setSpawnField(field) {
+        this.spawnField = field;
+    }
     update(dt) {
+            if (this.spawnField) {
+            this.spawnField.update(dt);
+        }
         this.entities.forEach(e    => e.update(dt, this));
         this.projectiles.forEach(p => p.update(dt, this));
         this.areaEffects.forEach(a => a.update(dt, this));
@@ -872,6 +878,15 @@ const pet = world.addEntity(
 );
 player.roster.push(pet);
 
+const spawnField = new SpawnField(world, player, {
+    radius: 140,
+    innerNoSpawn: 50,
+    maxWild: 8,
+    spawnInterval: 2.2,
+    speciesPool: [ SpeciesDB.Cat, SpeciesDB.Dog ]
+});
+
+world.setSpawnField(spawnField);
 
 time.add({
     update(dt) {
