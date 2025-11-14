@@ -1,0 +1,637 @@
+// ======================================================
+// Simple 2D canvas port of the Roblox terrain/biome code
+// - No server/client, no Remotes, no Instances
+// - Generates a chunked heightfield + biomes
+// - Scatters trees and berry bushes
+// - Renders as a top-down tile map
+// ======================================================
+
+// ---------------------- Helpers -----------------------
+
+function clamp(x, lo, hi) {
+    return x < lo ? lo : x > hi ? hi : x;
+}
+function lerp(a, b, t) {
+    return a + (b - a) * t;
+}
+function smoothStep01(x) {
+    return x * x * (3 - 2 * x);
+}
+
+// Simple deterministic "noise" based on sin hashing.
+// Returns value in [-1, 1].
+function noise3(x, y, z) {
+    const n = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453;
+    const f = n - Math.floor(n);
+    return f * 2 - 1; // map [0,1) => [-1,1)
+}
+
+// Seeded integer RNG (LCG) for reproducible randomness.
+function makeRng(seed) {
+    let s = seed >>> 0;
+    return function () {
+        s = (s * 1664525 + 1013904223) >>> 0;
+        return (s & 0xffff) / 0x10000;
+    };
+}
+
+// 2D key (for chunks etc.)
+function key(cx, cz) {
+    return String(cx) + "|" + String(cz);
+}
+
+// ---------------------- World Params ------------------
+
+const WorldParams = {
+    SEED: 1336,
+    CELL: 20,           // logical cell size (world units)
+    CHUNK_SIZE: 64,     // logical chunk size
+    CELLS_PER_EDGE: 10, // cells per chunk edge
+    WATER_BASE: 0
+};
+
+const P = WorldParams;
+const CHUNK_SIZE = P.CHUNK_SIZE;
+const CELLS_PER_EDGE = P.CELLS_PER_EDGE;
+const CELL_SIZE = CHUNK_SIZE / CELLS_PER_EDGE;
+const SEED = P.SEED;
+
+// ---------------------- Biomes ------------------------
+// Simplified port of the Lua biome array.
+// Here we only keep ids and some visual hints.
+const Biomes = [
+    {
+        id: "Taiga",
+        density: 1.3,
+        color: "#e0f0ff" // cold / snowy
+    },
+    {
+        id: "Meadow",
+        density: 1.0,
+        color: "#7fbf7f" // green grass
+    },
+    {
+        id: "Swamp",
+        density: 0.9,
+        color: "#446644"
+    },
+    {
+        id: "Beach",
+        density: 0.6,
+        color: "#f4e3a0"
+    },
+    {
+        id: "Mountains",
+        density: 0.7,
+        color: "#b0b0b0"
+    },
+    {
+        id: "Hills",
+        density: 0.9,
+        color: "#88cc66"
+    }
+];
+
+const BiomeById = (() => {
+    const out = {};
+    for (const b of Biomes) out[b.id] = b;
+    return out;
+})();
+
+// ---------------------- Biome Noise -------------------
+
+// bandpass with soft edges in [0,1]
+function bandpass(v, lo, hi, soft) {
+    soft = soft == null ? 0.1 : soft;
+    const a = lo - soft;
+    const b = lo;
+    const c = hi;
+    const d = hi + soft;
+
+    if (v <= a || v >= d) return 0;
+    if (v >= b && v <= c) return 1;
+    if (v > a && v < b) return smoothStep01((v - a) / (b - a));
+    // v in (c,d)
+    return smoothStep01((d - v) / (d - c));
+}
+
+// signals: T (temperature), W (moisture), Cn (coastness) in [0,1]
+function biomeSignals(x, z, seed) {
+    const s = seed || 0;
+    const T = clamp(0.5 + 0.5 * noise3(x * 0.00035, z * 0.00035, s * 0.11), 0, 1);
+    const W = clamp(0.5 + 0.5 * noise3(x * 0.00070, z * 0.00070, s * 0.37), 0, 1);
+    const coastNoise = 0.5 + 0.5 * noise3(x * 0.00090, z * 0.00090, s * 0.59);
+    const Cn = clamp(1 - Math.abs(coastNoise - 0.5) * 8, 0, 1); // near coast = 1
+    return { T, W, Cn };
+}
+
+// Biome rules (lightly translated)
+const BiomeRules = {
+    Taiga: {
+        t: [0.0, 0.4],
+        w: [0.0, 0.45],
+        coast: "inland",
+        bias: 1
+    },
+    Meadow: {
+        t: [0.35, 0.8],
+        w: [0.0, 0.55],
+        coast: "neutral",
+        bias: 1
+    },
+    Swamp: {
+        t: [0.1, 0.7],
+        w: [0.55, 1.0],
+        coast: "neutral",
+        bias: 1
+    },
+    Beach: {
+        coast: "coast",
+        coastWidth: 0.12,
+        bias: 1
+    },
+    Mountains: {
+        t: [0.1, 0.9],
+        w: [0.0, 0.7],
+        coast: "inland",
+        bias: 0.8
+    },
+    Hills: {
+        t: [0.1, 0.9],
+        w: [0.1, 0.8],
+        coast: "neutral",
+        bias: 1
+    }
+};
+
+// cached coarse cell weights
+const biomeCache = {}; // key -> { biomeId: weight }
+
+function biomeWeightsAtCell(ix, iz, seed) {
+    const k = ix + "|" + iz;
+    const hit = biomeCache[k];
+    if (hit) return hit;
+
+    const x = (ix + 0.5) * P.CELL;
+    const z = (iz + 0.5) * P.CELL;
+    const { T, W, Cn } = biomeSignals(x, z, seed);
+
+    const out = {};
+    let sum = 0;
+
+    for (const b of Biomes) {
+        const r = BiomeRules[b.id] || {};
+        let wt = 1;
+
+        if (r.t) wt *= bandpass(T, r.t[0], r.t[1], r.tSoft);
+        if (r.w) wt *= bandpass(W, r.w[0], r.w[1], r.wSoft);
+
+        if (r.coast === "coast") {
+            const w = r.coastWidth || 0.12;
+            wt *= bandpass(Cn, 1 - w, 1, w * 0.5);
+        } else if (r.coast === "inland") {
+            const w = r.coastWidth || 0.12;
+            wt *= bandpass(1 - Cn, 1 - w, 1, w * 0.5);
+        }
+
+        wt *= r.bias || 1;
+        if (wt > 0) {
+            out[b.id] = wt;
+            sum += wt;
+        }
+    }
+
+    if (sum > 1e-6) {
+        for (const id in out) out[id] = out[id] / sum;
+    } else {
+        out[Biomes[0].id] = 1;
+    }
+
+    biomeCache[k] = out;
+    return out;
+}
+
+function addScaledWeights(out, t, s) {
+    for (const k in t) {
+        out[k] = (out[k] || 0) + t[k] * s;
+    }
+}
+
+// BiomeNoise.biomeMix(x,z,seed)
+function biomeMix(x, z, seed) {
+    const gx = Math.floor(x / P.CELL);
+    const gz = Math.floor(z / P.CELL);
+    const fx = x / P.CELL - gx;
+    const fz = z / P.CELL - gz;
+
+    const w00 = biomeWeightsAtCell(gx + 0, gz + 0, seed);
+    const w10 = biomeWeightsAtCell(gx + 1, gz + 0, seed);
+    const w01 = biomeWeightsAtCell(gx + 0, gz + 1, seed);
+    const w11 = biomeWeightsAtCell(gx + 1, gz + 1, seed);
+
+    const out = {};
+    addScaledWeights(out, w00, (1 - fx) * (1 - fz));
+    addScaledWeights(out, w10, fx * (1 - fz));
+    addScaledWeights(out, w01, (1 - fx) * fz);
+    addScaledWeights(out, w11, fx * fz);
+
+    let sum = 0;
+    for (const _ in out) sum += out[_];
+    if (sum > 1e-6) {
+        for (const k in out) out[k] = out[k] / sum;
+    }
+    return out;
+}
+
+// ---------------------- Heightfield -------------------
+
+const SEA = P.WATER_BASE;
+const RIVER_MIN = 0.18;
+const RIVER_MAX_DEPTH = 12.0;
+const RIVER_CURVE = 1.35;
+
+const SHAPE = {
+    Default: { amp: 114, freq: 0.008, rough: 0.34, base: 0, water: 0 },
+
+    Taiga: { amp: 52, freq: 0.018, rough: 0.55, base: 2, water: 0 },
+    Meadow: { amp: 10, freq: 0.006, rough: 0.3, base: 0, water: 0 },
+    Beach: { amp: 1, freq: 0.01, rough: 0.25, base: -3, water: -2 },
+    Swamp: { amp: 2, freq: 0.004, rough: 0.15, base: -3, water: 20 },
+
+    Hills: { amp: 130, freq: 0.002, rough: 0.45, base: 3, water: 0 },
+    Mountains: { amp: 200, freq: 0.02, rough: 0.6, base: 12, water: -2 }
+};
+
+function fbm(x, z, seed, f, rough) {
+    let sum = 0;
+    let amp = 1;
+    rough = clamp(rough, 0.15, 0.95);
+    for (let i = 1; i <= 3; i++) {
+        sum += noise3(x * f, z * f, (seed || 0) * i * 0.137) * amp;
+        f *= 2;
+        amp *= rough;
+    }
+    return sum;
+}
+
+function ridged(x, z, seed, f, rough) {
+    let n = 0;
+    let a = 1;
+    for (let i = 1; i <= 3; i++) {
+        n += (1 - Math.abs(noise3(x * f, z * f, seed * i * 0.19))) * a;
+        f *= 2;
+        a *= rough;
+    }
+    return clamp(n, 0, 1);
+}
+
+function channels(x, z, seed) {
+    const wx = x + 180 * noise3(x * 0.0007, z * 0.0007, seed * 0.31);
+    const wz = z + 180 * noise3(x * 0.0007, z * 0.0007, seed * 0.53);
+    const k = ridged(wx, wz, seed, 0.0028, 0.55);
+    const t = Math.max(0, (k - 0.62) / (1 - 0.62));
+    return t;
+}
+
+// moisture weight helper for lakes (we just use it lightly)
+function moistureWeight(name) {
+    if (name === "Swamp") return 1;
+    if (name === "Beach") return 0.4;
+    return 0;
+}
+
+function lakeMask(x, z, seed, moistureBias) {
+    const wx = x + 120 * noise3(x * 0.0009, z * 0.0009, seed * 0.21);
+    const wz = z + 120 * noise3(x * 0.0009, z * 0.0009, seed * 0.47);
+    const basins = ridged(wx, wz, seed * 3.3, 0.0045, 0.55);
+    const t = 0.62;
+    const k = clamp((basins - t) / (1 - t), 0, 1);
+    return clamp(k * (0.6 + 0.8 * moistureBias), 0, 1);
+}
+
+// Height.sample(x,z,seed) -> { yG, yW, weights, waterFlag }
+function sampleHeight(x, z, seed) {
+    const w = biomeMix(x, z, seed);
+    let amp = 0, freq = 0, rough = 0, base = 0, water = 0;
+    for (const name in w) {
+        const wt = w[name];
+        const p = SHAPE[name] || SHAPE.Default;
+        amp += wt * p.amp;
+        freq += wt * p.freq;
+        rough += wt * p.rough;
+        base += wt * p.base;
+        water += wt * p.water;
+    }
+
+    const n = fbm(x, z, seed, freq, rough);
+    const nh = clamp(0.5 + 0.5 * n, 0, 1);
+    let yG = base + amp * nh;
+    let yW = SEA + water;
+
+    // rivers
+    const c = channels(x, z, seed);
+    if (c > RIVER_MIN) {
+        const t = (c - RIVER_MIN) / (1 - RIVER_MIN);
+        const moist = (w.Swamp || 0) * 0.9 + (w.Beach || 0) * 0.3;
+        const depth = RIVER_MAX_DEPTH * Math.pow(t, RIVER_CURVE) * (1 + 0.6 * moist);
+        yG -= depth;
+    }
+
+    // lakes (just a simple flag; we don't fill volumes here)
+    let lakeFlag = false;
+    let lakeDepth = 0;
+    let moist = 0;
+    for (const name in w) moist += w[name] * moistureWeight(name);
+    const lk = lakeMask(x, z, seed, moist);
+    if (lk > 0.55) {
+        lakeFlag = true;
+        lakeDepth = Math.floor(6 + lk * 6);
+        yW = yG + lakeDepth;
+    }
+
+    return { yG, yW, weights: w, lakeFlag };
+}
+
+// ---------------------- Flora & Chunk Grid ------------
+
+function dominantBiomeId(weights) {
+    let best = "Meadow";
+    let bestW = -1;
+    for (const id in weights) {
+        if (weights[id] > bestW) {
+            bestW = weights[id];
+            best = id;
+        }
+    }
+    return best;
+}
+
+// Trees + shrubs + berry bushes, but just as flags for rendering.
+const BIOME_TREES = {
+    Taiga: { base: 10, styles: ["pine", "fir", "spruce"] },
+    Meadow: { base: 8, styles: ["oak", "birch"] },
+    Beach: { base: 6, styles: ["palm"] },
+    Swamp: { base: 7, styles: ["willow", "cypress", "mangrove"] }
+};
+
+const BERRIES = {
+    red: { color: "#c82828" },
+    yellow: { color: "#f0c83c" },
+    blue: { color: "#3c7fd8" }
+};
+
+// grid cell: one entry per cell in a chunk
+// { x, z, yG, yW, weights, water, biomeId, tree?, bushKind? }
+function makeChunkGrid(cx, cz) {
+    const grid = {
+        cells: new Array(CELLS_PER_EDGE * CELLS_PER_EDGE)
+    };
+    const x0 = cx * CHUNK_SIZE;
+    const z0 = cz * CHUNK_SIZE;
+
+    // sample heights + biomes
+    for (let gx = 0; gx < CELLS_PER_EDGE; gx++) {
+        for (let gz = 0; gz < CELLS_PER_EDGE; gz++) {
+            const px = x0 + (gx + 0.5) * CELL_SIZE;
+            const pz = z0 + (gz + 0.5) * CELL_SIZE;
+            const { yG, yW, weights, lakeFlag } = sampleHeight(px, pz, SEED);
+            const idx = gz * CELLS_PER_EDGE + gx;
+            const biomeId = dominantBiomeId(weights);
+            grid.cells[idx] = {
+                x: px,
+                z: pz,
+                yG,
+                yW,
+                weights,
+                water: lakeFlag || yG < yW,
+                biomeId,
+                tree: false,
+                bushKind: null
+            };
+        }
+    }
+
+    scatterFloraInChunk(cx, cz, grid);
+    return grid;
+}
+
+function idx(gx, gz) {
+    return gz * CELLS_PER_EDGE + gx;
+}
+
+function inBounds(gx, gz) {
+    return gx >= 0 && gx < CELLS_PER_EDGE && gz >= 0 && gz < CELLS_PER_EDGE;
+}
+
+function scatterFloraInChunk(cx, cz, grid) {
+    const r = makeRng((cx * 73856093) ^ (cz * 19349663) ^ (SEED * 9167));
+    const baseX = cx * CHUNK_SIZE;
+    const baseZ = cz * CHUNK_SIZE;
+
+    const bName = (() => {
+        // pick biome of central cell as dominant
+        const mid = grid.cells[idx(Math.floor(CELLS_PER_EDGE / 2), Math.floor(CELLS_PER_EDGE / 2))];
+        return mid ? mid.biomeId : "Meadow";
+    })();
+    const spec = BIOME_TREES[bName] || BIOME_TREES.Meadow;
+    const densityScale = (BiomeById[bName] && BiomeById[bName].density) || 1;
+    const nTrees = Math.max(0, Math.floor((spec.base || 8) * densityScale));
+    const nShrubs = Math.max(0, Math.floor((spec.base || 8) * 1.2 * densityScale));
+
+    function surfaceAt(x, z) {
+        const gx = clamp(Math.floor((x - baseX) / CELL_SIZE), 0, CELLS_PER_EDGE - 1);
+        const gz = clamp(Math.floor((z - baseZ) / CELL_SIZE), 0, CELLS_PER_EDGE - 1);
+        const c = grid.cells[idx(gx, gz)];
+        return { c, gx, gz };
+    }
+
+    function slopeAt(gx, gz) {
+        const i = idx(gx, gz);
+        const ix = idx(Math.min(gx + 1, CELLS_PER_EDGE - 1), gz);
+        const iz = idx(gx, Math.min(gz + 1, CELLS_PER_EDGE - 1));
+        const y = grid.cells[i].yG;
+        const yx = grid.cells[ix].yG;
+        const yz = grid.cells[iz].yG;
+        return Math.max(Math.abs(yx - y), Math.abs(yz - y));
+    }
+
+    const SLOPE_MAX = 16;
+    const MIN2 = 10 * 10;
+    const placed = [];
+
+    function farFrom(x, z, min2) {
+        for (const p of placed) {
+            const dx = x - p.x;
+            const dz = z - p.z;
+            if (dx * dx + dz * dz < min2) return false;
+        }
+        return true;
+    }
+
+    // Trees
+    for (let i = 0; i < nTrees; i++) {
+        const x = baseX + r() * CHUNK_SIZE;
+        const z = baseZ + r() * CHUNK_SIZE;
+        const { c, gx, gz } = surfaceAt(x, z);
+        if (!c) continue;
+        if (c.yG >= c.yW && slopeAt(gx, gz) <= SLOPE_MAX && farFrom(x, z, MIN2)) {
+            c.tree = true;
+            placed.push({ x, z });
+        }
+    }
+
+    // Shrubs (just treated as extra trees visually)
+    for (let i = 0; i < nShrubs; i++) {
+        const x = baseX + r() * CHUNK_SIZE;
+        const z = baseZ + r() * CHUNK_SIZE;
+        const { c } = surfaceAt(x, z);
+        if (!c) continue;
+        if (c.yG >= c.yW && farFrom(x, z, 6 * 6)) {
+            c.tree = true; // coarser representation
+        }
+    }
+
+    // Berry bushes
+    const nBushes = Math.floor(2 + r() * 3); // 2..4
+    const kinds = ["red", "yellow", "blue"];
+    for (let i = 0; i < nBushes; i++) {
+        const x = baseX + r() * CHUNK_SIZE;
+        const z = baseZ + r() * CHUNK_SIZE;
+        const { c } = surfaceAt(x, z);
+        if (!c) continue;
+        if (c.yG >= c.yW) {
+            const kind = kinds[Math.floor(r() * kinds.length)];
+            c.bushKind = kind;
+        }
+    }
+}
+
+// ---------------------- Chunk Manager -----------------
+
+const loadedChunks = {}; // key -> grid
+
+function ensureChunk(cx, cz) {
+    const k = key(cx, cz);
+    if (!loadedChunks[k]) {
+        loadedChunks[k] = makeChunkGrid(cx, cz);
+    }
+    return loadedChunks[k];
+}
+
+// ---------------------- Rendering ---------------------
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+let camX = 0;
+let camZ = 0;
+let zoom = 1; // 1 pixel per world unit, can be tuned
+
+// UI: simple WASD + QE zoom
+const keys = {};
+window.addEventListener("keydown", e => {
+    keys[e.key.toLowerCase()] = true;
+});
+window.addEventListener("keyup", e => {
+    keys[e.key.toLowerCase()] = false;
+});
+
+function updateCamera(dt) {
+    const speed = 80;
+    if (keys["w"]) camZ -= speed * dt;
+    if (keys["s"]) camZ += speed * dt;
+    if (keys["a"]) camX -= speed * dt;
+    if (keys["d"]) camX += speed * dt;
+
+    if (keys["q"]) zoom *= 1 - 0.8 * dt;
+    if (keys["e"]) zoom *= 1 + 0.8 * dt;
+    zoom = clamp(zoom, 0.25, 4);
+}
+
+function drawWorld() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const worldToScreen = (wx, wz) => {
+        const sx = (wx - camX) * zoom + canvas.width / 2;
+        const sz = (wz - camZ) * zoom + canvas.height / 2;
+        return { sx, sz };
+    };
+
+    // determine visible chunk range in world
+    const halfW = canvas.width / (2 * zoom);
+    const halfH = canvas.height / (2 * zoom);
+
+    const minX = camX - halfW;
+    const maxX = camX + halfW;
+    const minZ = camZ - halfH;
+    const maxZ = camZ + halfH;
+
+    const minCX = Math.floor(minX / CHUNK_SIZE) - 1;
+    const maxCX = Math.floor(maxX / CHUNK_SIZE) + 1;
+    const minCZ = Math.floor(minZ / CHUNK_SIZE) - 1;
+    const maxCZ = Math.floor(maxZ / CHUNK_SIZE) + 1;
+
+    for (let cx = minCX; cx <= maxCX; cx++) {
+        for (let cz = minCZ; cz <= maxCZ; cz++) {
+            const grid = ensureChunk(cx, cz);
+            drawChunk(grid, worldToScreen);
+        }
+    }
+}
+
+function drawChunk(grid, worldToScreen) {
+    for (let gx = 0; gx < CELLS_PER_EDGE; gx++) {
+        for (let gz = 0; gz < CELLS_PER_EDGE; gz++) {
+            const c = grid.cells[idx(gx, gz)];
+            const { sx, sz } = worldToScreen(c.x, c.z);
+            const size = CELL_SIZE * zoom;
+
+            // base ground color from biome
+            const biome = BiomeById[c.biomeId] || BiomeById["Meadow"];
+            let color = biome.color;
+
+            // water
+            if (c.water) {
+                color = "#4c8bf5";
+            }
+
+            ctx.fillStyle = color;
+            ctx.fillRect(sx - size / 2, sz - size / 2, size, size);
+
+            // trees (dark dot)
+            if (c.tree) {
+                ctx.fillStyle = "#2f472f";
+                const r = size * 0.2;
+                ctx.beginPath();
+                ctx.arc(sx, sz, r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // berry bushes: small colored dot
+            if (c.bushKind) {
+                const b = BERRIES[c.bushKind];
+                ctx.fillStyle = b ? b.color : "#ffffff";
+                const r = size * 0.15;
+                ctx.beginPath();
+                ctx.arc(sx, sz, r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+}
+
+// ---------------------- Main Loop ---------------------
+
+let lastTime = performance.now();
+
+function loop(now) {
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    updateCamera(dt);
+    drawWorld();
+
+    requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
