@@ -1,0 +1,342 @@
+// ---------------- BrainService (Roblox-style) ----------------
+const NATURE_BIAS = {
+    aggressive: 0.7,
+    neutral:    0.0,
+    timid:     -0.7,
+};
+
+function makePetBrain(nature = "aggressive") {
+    return {
+        type:           "pet",
+        mode:           "auto",
+        nature,
+        speed:          80,
+        followDistance: 50,
+        attackRange:    40,
+        leashRadius:    200,
+        focus:          null,
+        requestedPos:   null,
+        commandPos:     null,
+        commandExpire:  0,
+    };
+}
+
+function makeWildBrain(nature = "neutral") {
+    return {
+        type:        "wild",
+        mode:        "auto",
+        nature,
+        speed:       70,
+        aggroRange:  160,
+        attackRange: 40,
+        roamRadius:  120,
+        homePos:     null,
+        roamTarget:  null,
+        roamTimer:   0,
+        focus:       null,
+        requestedPos:null,
+    };
+}
+
+function observe(ctx, world) {
+    ctx.observed = [];
+    const self = ctx.entity;
+    for (const other of world.entities) {
+        if (other !== self && other.alive) ctx.observed.push(other);
+    }
+}
+
+function weighSelf(ctx) {
+    const e = ctx.entity;
+    const hp  = e.data.hp;
+    const max = e.data.maxHP || hp || 1;
+    ctx.selfHealth = Math.max(0, Math.min(1, hp / max));
+
+    const bias = NATURE_BIAS[ctx.brain.nature || "neutral"] ?? 0;
+    let raw = (ctx.selfHealth - 0.5) * 2 + bias;
+    if (raw >  1) raw =  1;
+    if (raw < -1) raw = -1;
+    ctx.totalFightFlight = raw;
+}
+
+function scanEntities(ctx) {
+    ctx.enemyPressures = [];
+    ctx.teamPressures  = [];
+
+    const e  = ctx.entity;
+    const ex = e.x, ez = e.z;
+
+    for (const other of ctx.observed) {
+        const dx = other.x - ex;
+        const dz = other.z - ez;
+        const dist  = Math.hypot(dx, dz);
+        const angle = Math.atan2(dz, dx);
+
+        const ohp  = other.data.hp;
+        const omax = other.data.maxHP || ohp || 1;
+        const health = Math.max(0, Math.min(1, ohp / omax));
+
+        const p = { entity: other, dist, angle, health };
+        if (other.team !== e.team) ctx.enemyPressures.push(p);
+        else                       ctx.teamPressures.push(p);
+    }
+}
+
+function chooseFocus(ctx) {
+    const e     = ctx.entity;
+    const brain = ctx.brain;
+
+    let best = null;
+    let bestScore = -Infinity;
+
+    for (const p of ctx.enemyPressures) {
+        let s = (1 - p.health) + (1 / (1 + p.dist));
+
+        if (brain.type === "pet" && e.owner) {
+            const ox = e.owner.x, oz = e.owner.z;
+            const dx = p.entity.x - ox;
+            const dz = p.entity.z - oz;
+            const dOwner = Math.hypot(dx, dz);
+            const leash  = brain.leashRadius ?? 200;
+            if (dOwner > leash + 40) s = -Infinity;
+        }
+
+        if (s > bestScore) {
+            bestScore = s;
+            best = p.entity;
+        }
+    }
+    ctx.focus = best;
+}
+
+function computeFollowPositionForPet(ctx) {
+    const e     = ctx.entity;
+    const brain = ctx.brain;
+    const owner = e.owner;
+    if (!owner) return { x: e.x, z: e.z };
+
+    const desired = brain.followDistance ?? 50;
+    const offX = -desired * 0.7;
+    const offZ =  desired * 0.7;
+
+    let fx = owner.x + offX;
+    let fz = owner.z + offZ;
+
+    const dx = fx - e.x, dz = fz - e.z;
+    const d  = Math.hypot(dx, dz);
+    const maxStep = desired * 2;
+
+    if (d > maxStep && d > 0) {
+        const s = maxStep / d;
+        fx = e.x + dx * s;
+        fz = e.z + dz * s;
+    }
+    return { x: fx, z: fz };
+}
+
+function chooseSpot(ctx) {
+    const e     = ctx.entity;
+    const brain = ctx.brain;
+    let basePos;
+
+    if (brain.type === "pet") {
+        basePos = computeFollowPositionForPet(ctx);
+    } else {
+        if (!brain.homePos) brain.homePos = { x: e.x, z: e.z };
+        basePos = brain.homePos;
+    }
+
+    if (!ctx.focus) {
+        ctx.requestedPos = basePos;
+        return;
+    }
+
+    const fx = ctx.focus.x, fz = ctx.focus.z;
+    const dx = fx - e.x, dz = fz - e.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1e-3) {
+        ctx.requestedPos = { x: e.x, z: e.z };
+        return;
+    }
+
+    const dirX = dx / dist, dirZ = dz / dist;
+    const desiredRange = brain.attackRange ?? 40;
+
+    const ff = ctx.totalFightFlight || 0;
+    let targetDist = desiredRange - ff * 20;
+    if (targetDist < 15) targetDist = 15;
+    if (targetDist > 80) targetDist = 80;
+
+    let tx = fx - dirX * targetDist;
+    let tz = fz - dirZ * targetDist;
+
+    if (brain.type === "pet" && e.owner) {
+        const ox = e.owner.x, oz = e.owner.z;
+        const vx = tx - ox,   vz = tz - oz;
+        const d  = Math.hypot(vx, vz);
+        const leash = brain.leashRadius ?? 200;
+        if (d > leash && d > 0) {
+            const s = leash / d;
+            tx = ox + vx * s;
+            tz = oz + vz * s;
+        }
+    }
+
+    ctx.requestedPos = { x: tx, z: tz };
+}
+
+function decideAttacks(ctx) {
+    const brain = ctx.brain;
+    const e     = ctx.entity;
+    if (brain.mode === "manual" || brain.mode === "semi") return;
+    if (!ctx.focus) return;
+
+    const dx = ctx.focus.x - e.x;
+    const dz = ctx.focus.z - e.z;
+    const dist = Math.hypot(dx, dz);
+    const range = brain.attackRange ?? 40;
+
+    const rules = [
+        { id: "fang", cond: () => dist <= range } // single melee for now
+    ];
+
+    for (const r of rules) {
+        if (r.cond()) {
+            e.applyCommand({ type: COMMAND.ABILITY, ability: "Q" });
+            return;
+        }
+    }
+}
+
+function decideMovement(ctx) {
+    const brain = ctx.brain;
+    const e     = ctx.entity;
+
+    if (brain.mode === "manual") return;
+    if (!ctx.requestedPos) {
+        e.applyCommand({ type: COMMAND.STOP });
+        return;
+    }
+
+    const dx = ctx.requestedPos.x - e.x;
+    const dz = ctx.requestedPos.z - e.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1) {
+        e.applyCommand({ type: COMMAND.STOP });
+        return;
+    }
+    e.applyCommand({ type: COMMAND.MOVE, dx, dz });
+}
+
+function tickOne(entity, dt, world) {
+    const brain = entity.brain;
+    if (!brain || !entity.alive) return;
+    if (entity.data.hp <= 0) {
+        entity.applyCommand({ type: COMMAND.STOP });
+        return;
+    }
+
+    const ctx = {
+        entity,
+        brain,
+        dt,
+        selfHealth:       1,
+        totalFightFlight: 0,
+        observed:         [],
+        enemyPressures:   [],
+        teamPressures:    [],
+        focus:            null,
+        requestedPos:     null,
+    };
+
+    observe(ctx, world);
+    weighSelf(ctx);
+    scanEntities(ctx);
+    chooseFocus(ctx);
+    chooseSpot(ctx);
+    decideAttacks(ctx);
+    decideMovement(ctx);
+}
+
+const BrainService = {
+    makePetBrain,
+    makeWildBrain,
+    stepAll(world, dt) {
+        for (const e of world.entities) {
+            if (e.brain) tickOne(e, dt, world);
+        }
+    }
+};
+
+class RosterEntity extends Entity {
+    constructor(world, species, owner, x, z) {
+        super(world, species, x, z);
+        this.owner = owner;
+        this.team  = 0;
+        this.brain = BrainService.makePetBrain("aggressive");
+    }
+
+    update(dt, world) {
+        // interpret any currentCommand from BrainService
+        if (this.currentCommand) {
+            switch (this.currentCommand.type) {
+                case COMMAND.MOVE: {
+                    const {dx, dz} = this.currentCommand;
+                    const len = Math.hypot(dx, dz) || 1;
+                    this.vx = (dx / len) * this.data.spd;
+                    this.vz = (dz / len) * this.data.spd;
+                    break;
+                }
+                case COMMAND.STOP:
+                    this.vx = 0;
+                    this.vz = 0;
+                    break;
+                case COMMAND.ABILITY:
+                    this.handleAbility(world, this.currentCommand);
+                    this.currentCommand = null;
+                    break;
+            }
+        }
+        super.update(dt, world);
+    }
+}
+
+class WildEntity extends Entity {
+    constructor(world, species, x, z) {
+        super(world, species, x, z);
+        this.brain = BrainService.makeWildBrain("neutral");
+    }
+
+    update(dt, world) {
+        if (this.currentCommand) {
+            switch (this.currentCommand.type) {
+                case COMMAND.MOVE: {
+                    const {dx, dz} = this.currentCommand;
+                    const len = Math.hypot(dx, dz) || 1;
+                    this.vx = (dx / len) * this.data.spd;
+                    this.vz = (dz / len) * this.data.spd;
+                    break;
+                }
+                case COMMAND.STOP:
+                    this.vx = 0;
+                    this.vz = 0;
+                    break;
+                case COMMAND.ABILITY:
+                    this.handleAbility(world, this.currentCommand);
+                    this.currentCommand = null;
+                    break;
+            }
+        }
+        super.update(dt, world);
+    }
+}
+
+time.add({
+    update(dt) {
+        BrainService.stepAll(world, dt);        // AI
+        Abilities.tickCooldowns(dt, world);     // ability cooldowns
+        world.update(dt);                       // physics, spawn field
+        camera.update(dt);
+        world.draw(ctx, camera);
+    }
+});
