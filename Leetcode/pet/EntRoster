@@ -1,0 +1,283 @@
+const canvas = document.getElementById("canvas")
+const ctx = canvas.getContext("2d")
+const size = 8
+const hsize = size / 2;
+
+class World{
+    constructor(){
+        this.player = null;
+        this.bots = []
+        this.entities = []
+        this.renderList = []
+        this.debugRenderList = []
+    }
+    render(){
+        this.player.draw();
+        this.renderList = this.entities;
+        for (let i = 0; i < this.renderList.length; i++){
+            this.renderList[i].draw();
+        }
+    }
+    debugUI(){
+        for (let i = 0; i < this.debugRenderList.length; i++){
+            ctx.fillText(this.debugRenderList[i].info, 30, 30 + (i * 20))
+        }
+    }
+    preprocessTick(){}
+    postprocessTick(){
+        for (let i = 0; i < this.entities.length; i++){
+            if (!this.entities[i].checkAlive()){
+            //capturable logic here. team 0 entity can be captured
+                this.entities.splice(i, 1);
+                i--;
+            }
+        }
+    }
+}
+let commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ability1: false}
+document.addEventListener("keydown", (event) => {
+    switch(event.key){
+        case "ArrowUp":
+            commands.player.y = -1
+            break;
+        case "ArrowDown":
+            commands.player.y = 1
+            break;
+        case "ArrowLeft":
+            commands.player.x = -1
+            break;
+        case "ArrowRight":
+            commands.player.x = 1
+            break;
+        case "w":
+            commands.entity.y = -1
+            break;
+        case "s":
+            commands.entity.y = 1
+            break;
+        case "a":
+            commands.entity.x = -1
+            break;
+        case "d":
+            commands.entity.x = 1
+            break;
+        case "q":
+            commands.ab1 = true
+            break;
+    }
+});
+class Player{
+    constructor(x, y){
+        this.pos = {x: x, y: y}
+        this.inventory = []
+        this.roster = {s1: null, s2: null, s3: null}
+        this.commands = {player: {x:0, y:0}, entity: {x:0, y:0}, ab1: null}
+        this.activeEntity = null;
+        this.activeEntityBot = null;
+    }
+    tick(){
+        this.sendCommand();
+        this.moveSelf()
+    }
+    sendCommand(){
+        //overwrite brain of controlled entity
+        if (this.activeEntityBot != null){
+            this.activeEntityBot.commandedIntent.vel.x = this.commands.entity.x
+            this.activeEntityBot.commandedIntent.vel.y = this.commands.entity.y
+        }
+        this.activeEntityBot.commandedIntent.ab1 = this.commands.ab1 ? "example" : null
+    }
+    moveSelf(){
+        this.pos.x += this.commands.player.x
+        this.pos.y += this.commands.player.y
+    }
+    draw(){
+        ctx.fillRect(this.pos.x - hsize, this.pos.y - hsize, size, size)
+    }
+}
+class WorldEntity{
+    constructor(){
+        this.speed; this.life; this.dir;
+    }
+    projectileTick(){}
+    AreaEffectTick(){}
+}
+class Combat{
+    constructor(){
+    }
+    validateDamage(from, to, ability){
+        //simple damage
+        to.hp -= ability.atk;
+    }
+}
+class Entity {
+    constructor(x, y){
+        this.pos = {x: x, y: y}
+        this.team = 0;
+        this.intents = {vel: {x: 0, y:0}, ab1: null}
+        this.target = null;
+        this.alive = true;
+        this.range = 50;
+        this.maxHP=10; this.hp = 10; this.atk = 1;
+    }
+    applyIntent(){
+        //pretend its already validated
+        this.pos.x += this.intents.vel.x
+        this.pos.y += this.intents.vel.y
+        //also validated
+        if (this.intents.ab1 && this.target) {
+            const dx = this.target.pos.x - this.pos.x;
+            const dy = this.target.pos.y - this.pos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist <= this.range) { // Check if target is within range
+                this.processAbility(this.intents.ab1, this.target);
+            } else {
+                console.log("Target out of range!");
+            }
+            this.intents.ab1 = null; // Reset ability intent after processing
+        }
+    }
+    processAbility(abilityName, target) {
+        if (target && abilities[abilityName]) {
+            target.hp -= abilities[abilityName].atk; // Apply damage to the target
+            console.log(
+                `Entity at (${this.pos.x}, ${this.pos.y}) used ${abilityName} on target at (${target.pos.x}, ${target.pos.y}). Target HP: ${target.hp}`
+            );
+        }
+    }
+    tick(){
+        if (this.alive){
+            this.applyIntent();
+            this.checkAlive();
+        } else {
+            captureListen(this);
+        }
+    }
+    checkAlive(){
+        if (this.hp < 0){
+            this.alive = false
+        }
+    }
+    draw(){
+        ctx.fillRect(this.pos.x - hsize, this.pos.y - hsize, size, size)
+    }
+}
+class Bot {
+    constructor(entity) {
+        this.e = entity;
+        this.commandedIntent = { vel: { x: 0, y: 0 }, ab1: null };
+        this.outputIntent = { vel: { x: 0, y: 0 }, ab1: null };
+        this.bestTarget = null;
+    }
+
+    exampletick() {
+        if (this.commandedIntent.vel.x == 0 && this.commandedIntent.vel.y == 0) {
+            this.e.intents.vel.x = Math.random() - 0.5;
+            this.e.intents.vel.y = Math.random() - 0.5;
+        } else {
+            this.e.intents.vel.x = this.commandedIntent.vel.x;
+            this.e.intents.vel.y = this.commandedIntent.vel.y;
+        }
+        this.findTarget();
+        this.e.target = this.bestTarget;
+
+        if (this.bestTarget != null) {
+            const dx = this.bestTarget.pos.x - this.e.pos.x;
+            const dy = this.bestTarget.pos.y - this.e.pos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist <= this.e.range && this.commandedIntent.ab1) {
+                this.e.intents.ab1 = "example"; // Assign ability to entity's intent
+            }
+        }
+
+        this.commandedIntent = { vel: { x: 0, y: 0 }, ab1: null };
+        this.outputIntent = { vel: { x: 0, y: 0 }, ab1: null };
+    }
+
+    findTarget() {
+        // Find closest enemy
+        let closestDist = Infinity;
+        this.bestTarget = null;
+        for (let i = 0; i < world.entities.length; i++) {
+            const potentialTarget = world.entities[i];
+            if (potentialTarget.team != this.e.team) {
+                const dx = potentialTarget.pos.x - this.e.pos.x;
+                const dy = potentialTarget.pos.y - this.e.pos.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    this.bestTarget = potentialTarget;
+                }
+            }
+        }
+    }
+}
+class RosterSystem{
+    constructor(){
+        this.slots = {s1: null, s2: null, s3: null}
+    }
+}
+function captureListen(entity){
+    //entity is dead, check for player proximity to capture
+    const playerPos = world.player.pos;
+    const dx = playerPos.x - entity.pos.x;
+    const dy = playerPos.y - entity.pos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 20){
+        entity.alive = true;
+        entity.hp = entity.maxHP;
+        entity.team = 1;
+        console.log("Entity captured!");
+    }
+    //store in player roster or storage, take out of world
+}
+const abilities = {
+    example: {cd: 1, atk: 1, type:"meleeAutoTarget"},
+}
+function spawnCircle(x, y, radius, numEntities){
+    const angleIncrement = (2 * Math.PI) / numEntities;
+    for (let i = 0; i < numEntities; i++){
+        const angle = i * angleIncrement;
+        const entityX = x + radius * Math.cos(angle);
+        const entityY = y + radius * Math.sin(angle);
+        const entity = new Entity(entityX, entityY);
+        const bot = new Bot(entity);
+        world.bots.push(bot);
+        world.entities.push(entity);
+    }
+}
+
+const world = new World();
+const player = new Player(400,400);
+const entity = new Entity(410,400);
+entity.team = 1;
+world.entities.push(entity);
+world.player = player;
+const bot = new Bot(entity);
+world.bots.push(bot);
+player.activeEntity = entity;
+player.activeEntityBot = bot;
+spawnCircle(400,400,50,3);
+
+function gameLoop(){
+    ctx.clearRect(0,0,canvas.width, canvas.height)
+    //update world
+    world.player.commands = commands;
+    world.player.tick();
+    for (let i = 0; i < world.bots.length; i++){
+        world.bots[i].exampletick();
+    }
+    for (let i = 0; i < world.entities.length; i++){
+        world.entities[i].tick();
+    }
+
+    //draw world
+    world.render();
+    world.debugUI();
+    //reset commands
+    commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ability1: false}
+    requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
