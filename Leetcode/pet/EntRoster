@@ -26,15 +26,15 @@ class World{
     preprocessTick(){}
     postprocessTick(){
         for (let i = 0; i < this.entities.length; i++){
-            if (!this.entities[i].checkAlive()){
-            //capturable logic here. team 0 entity can be captured
+            const entity = this.entities[i];
+            if (!entity.checkAlive() && entity.team != 0){
                 this.entities.splice(i, 1);
                 i--;
             }
         }
     }
 }
-let commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ability1: false}
+let commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ab1: false}
 document.addEventListener("keydown", (event) => {
     switch(event.key){
         case "ArrowUp":
@@ -70,9 +70,10 @@ class Player{
     constructor(x, y){
         this.pos = {x: x, y: y}
         this.inventory = []
-        this.roster = {s1: null, s2: null, s3: null}
+        this.roster = new RosterSystem();
+        this.storage = new StorageSystem();
         this.commands = {player: {x:0, y:0}, entity: {x:0, y:0}, ab1: null}
-        this.activeEntity = null;
+        this.activeEntity = this.roster.members[0] || null;
         this.activeEntityBot = null;
     }
     tick(){
@@ -84,8 +85,8 @@ class Player{
         if (this.activeEntityBot != null){
             this.activeEntityBot.commandedIntent.vel.x = this.commands.entity.x
             this.activeEntityBot.commandedIntent.vel.y = this.commands.entity.y
+            this.activeEntityBot.commandedIntent.ab1 = this.commands.ab1 ? "example" : null
         }
-        this.activeEntityBot.commandedIntent.ab1 = this.commands.ab1 ? "example" : null
     }
     moveSelf(){
         this.pos.x += this.commands.player.x
@@ -155,9 +156,10 @@ class Entity {
         }
     }
     checkAlive(){
-        if (this.hp < 0){
+        if (this.hp <= 0){
             this.alive = false
         }
+        return this.alive;
     }
     draw(){
         ctx.fillRect(this.pos.x - hsize, this.pos.y - hsize, size, size)
@@ -216,20 +218,59 @@ class Bot {
 }
 class RosterSystem{
     constructor(){
-        this.slots = {s1: null, s2: null, s3: null}
+        this.maxSlots = 3;
+        this.members = [];
+    }
+    canAdd(){
+        return this.members.length < this.maxSlots;
+    }
+    addFromEntity(entity){
+        if (!this.canAdd()) return false;
+        this.members.push(entity);
+        return true;
+    }
+}
+class StorageSystem{
+    constructor(){
+        this.maxSlots = 50;
+        this.members = []
+    }
+    canAdd(){
+        return this.members.length < this.maxSlots;
+    }
+    addFromEntity(entity){
+        if (!this.canAdd()) return false;
+        this.members.push(entity);
+        return true;
     }
 }
 function captureListen(entity){
     //entity is dead, check for player proximity to capture
+    if (entity.team != 0) return; //only capture neutral entities
     const playerPos = world.player.pos;
     const dx = playerPos.x - entity.pos.x;
     const dy = playerPos.y - entity.pos.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (dist < 20){
-        entity.alive = true;
-        entity.hp = entity.maxHP;
-        entity.team = 1;
-        console.log("Entity captured!");
+        const canAddR = world.player.roster.canAdd();
+        const canAddS = world.player.storage.canAdd();
+        if (!canAddR && !canAddS) return; //nowhere to put it
+        if (canAddR){
+            const addedToRoster = world.player.roster.addFromEntity(entity);
+
+        } else if (canAddS){
+            const addedToStorage = world.player.storage.addFromEntity(entity);
+        }
+        const idx = world.entities.indexOf(entity);
+        if (idx > -1){
+            world.entities.splice(idx, 1);
+        }
+        for (let i = 0; i < world.bots.length; i++){
+            if (world.bots[i].e === entity){
+                world.bots.splice(i, 1);
+                break;
+            }
+        }
     }
     //store in player roster or storage, take out of world
 }
@@ -277,7 +318,7 @@ function gameLoop(){
     world.render();
     world.debugUI();
     //reset commands
-    commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ability1: false}
+    commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ab1: false}
     requestAnimationFrame(gameLoop);
 }
 requestAnimationFrame(gameLoop);
