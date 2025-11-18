@@ -84,9 +84,9 @@ document.addEventListener("keydown", (event) => {
                 }
             }
             break;
-        case "1":
-            if (worldListener.player.roster.members[0]){
-                if (worldListener.player.roster.members[0].inWorld == false){
+        case "3":
+            if (worldListener.player.roster.members[2]){
+                if (worldListener.player.roster.members[2].inWorld == false){
                     commands.bringEntity1Out = true;
                 } else {
                     commands.bringEntity1Out = false;
@@ -287,11 +287,11 @@ function captureListen(entity){
         const canAddS = world.player.storage.canAdd();
         if (!canAddR && !canAddS) return; //nowhere to put it
         if (canAddR){
-            const addedToRoster = world.player.roster.addFromEntity(entity);
-
+            world.player.roster.addFromEntity(entity);
         } else if (canAddS){
-            const addedToStorage = world.player.storage.addFromEntity(entity);
+            world.player.storage.addFromEntity(entity);
         }
+        entity.inWorld = false
         const idx = world.entities.indexOf(entity);
         if (idx > -1){
             world.entities.splice(idx, 1);
@@ -304,6 +304,41 @@ function captureListen(entity){
         }
     }
     //store in player roster or storage, take out of world
+}
+function toggleRosterEntity(slotIndex){
+    const player = world.player;
+    const member = player.roster.members[slotIndex]
+    if (!member) return;
+    if (!member.inWorld){
+        member.inWorld = true;
+        member.team = 1
+        member.pos.x = player.pos.x + 10
+        member.pos.y = player.pos.y + 10
+        world.entities.push(member)
+        const bot = new Bot(member)
+        world.bots.push(bot)
+        if (!player.activeEntity){
+            player.activeEntity = member;
+            player.activeEntityBot = bot;
+        }
+    } else {
+        member.inWorld = false;
+        const idx = world.entities.indexOf(member);
+        if (idx > -1){
+            world.entities.splice(idx, 1);
+        }
+        for (let i = 0; i < world.bots.length; i++){
+            if (world.bots[i].e === member){
+                if (player.activeEntity === member){
+                    player.activeEntity = null;
+                    player.activeEntityBot = null;
+                }
+                world.bots.splice(i, 1);
+                break;
+            }
+        }
+
+    }
 }
 const abilities = {
     example: {cd: 1, atk: 1, type:"meleeAutoTarget"},
@@ -339,6 +374,9 @@ function gameLoop(){
     //update world
     world.player.commands = commands;
     world.player.tick();
+    if (commands.bringEntity1Out) toggleRosterEntity(0);
+    if (commands.bringEntity2Out) toggleRosterEntity(1);
+    if (commands.bringEntity3Out) toggleRosterEntity(2);
     for (let i = 0; i < world.bots.length; i++){
         world.bots[i].exampletick();
     }
@@ -350,7 +388,8 @@ function gameLoop(){
     world.render();
     world.debugUI();
     //reset commands
-    commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ab1: false}
+    commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ab1: false,
+    bringEntity1Out:commands.bringEntity1Out, bringEntity2Out:commands.bringEntity2Out, bringEntity3Out:commands.bringEntity3Out}
     requestAnimationFrame(gameLoop);
 }
 requestAnimationFrame(gameLoop);
