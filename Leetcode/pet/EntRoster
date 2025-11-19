@@ -1,395 +1,540 @@
-const canvas = document.getElementById("canvas")
-const ctx = canvas.getContext("2d")
-const size = 8
-const hsize = size / 2;
+/* ==============================
+   CONFIG & CANVAS
+   ============================== */
 
-class World{
-    constructor(){
-        this.player = null;
-        this.bots = []
-        this.entities = []
-        this.renderList = []
-        this.debugRenderList = []
-    }
-    render(){
-        this.player.draw();
-        this.renderList = this.entities;
-        for (let i = 0; i < this.renderList.length; i++){
-            this.renderList[i].draw();
-        }
-    }
-    debugUI(){
-        for (let i = 0; i < this.debugRenderList.length; i++){
-            ctx.fillText(this.debugRenderList[i].info, 30, 30 + (i * 20))
-        }
-    }
-    preprocessTick(){}
-    postprocessTick(){
-        for (let i = 0; i < this.entities.length; i++){
-            const entity = this.entities[i];
-            if (!entity.checkAlive() && entity.team != 0){
-                this.entities.splice(i, 1);
-                i--;
-            }
-        }
-    }
+const canvas = document.getElementById("canvas");
+const ctx    = canvas.getContext("2d");
+
+const SIZE  = 8;
+const HSIZE = SIZE / 2;
+
+/* ==============================
+   COMMAND STATE + INPUT
+   ============================== */
+
+// Per-frame “intent” from the player
+let commands = {
+    player: { x: 0, y: 0 },   // player movement
+    entity: { x: 0, y: 0 },   // active pet movement
+    ab1:    false,            // ability 1
+    bringSlot: null,          // 0,1,2 for roster slots, or null
+};
+
+function resetCommands() {
+    commands = {
+        player: { x: 0, y: 0 },
+        entity: { x: 0, y: 0 },
+        ab1:    false,
+        bringSlot: null,
+    };
 }
-let commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ab1: false,
-bringEntity1Out: true, bringEntity2Out: false, bringEntity3Out: false}
-let worldListener = null
+
+// World reference is set after construction, but we only
+// consult it in the main loop, not in input handler.
+let world = null;
+
+// Simple key → command mapping
 document.addEventListener("keydown", (event) => {
-    switch(event.key){
+    switch (event.key) {
+        // Player movement (arrows)
         case "ArrowUp":
-            commands.player.y = -1
+            commands.player.y = -1;
             break;
         case "ArrowDown":
-            commands.player.y = 1
+            commands.player.y = 1;
             break;
         case "ArrowLeft":
-            commands.player.x = -1
+            commands.player.x = -1;
             break;
         case "ArrowRight":
-            commands.player.x = 1
+            commands.player.x = 1;
             break;
+
+        // Pet movement (WASD)
         case "w":
-            commands.entity.y = -1
+        case "W":
+            commands.entity.y = -1;
             break;
         case "s":
-            commands.entity.y = 1
+        case "S":
+            commands.entity.y = 1;
             break;
         case "a":
-            commands.entity.x = -1
+        case "A":
+            commands.entity.x = -1;
             break;
         case "d":
-            commands.entity.x = 1
+        case "D":
+            commands.entity.x = 1;
             break;
+
+        // Ability 1
         case "q":
-            commands.ab1 = true
+        case "Q":
+            commands.ab1 = true;
             break;
+
+        // Roster hotkeys
         case "1":
-            if (worldListener.player.roster.members[0]){
-                if (worldListener.player.roster.members[0].inWorld == false){
-                    commands.bringEntity1Out = true;
-                } else {
-                    commands.bringEntity1Out = false;
-                }
-            }
+            commands.bringSlot = 0;
             break;
         case "2":
-            if (worldListener.player.roster.members[1]){
-                if (worldListener.player.roster.members[1].inWorld == false){
-                    commands.bringEntity2Out = true;
-                } else {
-                    commands.bringEntity2Out = false;
-                }
-            }
+            commands.bringSlot = 1;
             break;
         case "3":
-            if (worldListener.player.roster.members[2]){
-                if (worldListener.player.roster.members[2].inWorld == false){
-                    commands.bringEntity1Out = true;
-                } else {
-                    commands.bringEntity1Out = false;
-                }
-            }
+            commands.bringSlot = 2;
             break;
-
-
     }
 });
-class Player{
-    constructor(x, y){
-        this.pos = {x: x, y: y}
-        this.inventory = []
-        this.roster = new RosterSystem();
-        this.storage = new StorageSystem();
-        this.commands = { player: { x: 0, y: 0 }, entity: { x: 0, y: 0 }, ab1: null };
-        this.activeEntity = this.roster.members[0] || null;
-        this.activeEntityBot = null;
-    }
-    tick(){
-        this.sendCommand();
-        this.moveSelf()
-    }
-    sendCommand(){
-        if (this.activeEntityBot != null){
-            this.activeEntityBot.commandedIntent.vel.x = this.commands.entity.x
-            this.activeEntityBot.commandedIntent.vel.y = this.commands.entity.y
-            this.activeEntityBot.commandedIntent.ab1 = this.commands.ab1 ? "example" : null
-        }
 
-    }
-    moveSelf(){
-        this.pos.x += this.commands.player.x
-        this.pos.y += this.commands.player.y
-    }
-    draw(){
-        ctx.fillRect(this.pos.x - hsize, this.pos.y - hsize, size, size)
-    }
-}
-class WorldEntity{
-    constructor(){
-        this.speed; this.life; this.dir;
-    }
-    projectileTick(){}
-    AreaEffectTick(){}
-}
-class Combat{
-    constructor(){
-    }
-    validateDamage(from, to, ability){
-        //simple damage
-        to.hp -= ability.atk;
-    }
-}
+/* ==============================
+   ABILITIES
+   ============================== */
+
+const abilities = {
+    example: { cd: 1, atk: 1, type: "meleeAutoTarget" },
+};
+
+/* ==============================
+   CORE CLASSES
+   ============================== */
+
 class Entity {
-    constructor(x, y){
-        this.pos = {x: x, y: y}
-        this.team = 0;
-        this.intents = {vel: {x: 0, y:0}, ab1: null}
-        this.target = null;
-        this.alive = true;
+    constructor(x, y) {
+        this.pos   = { x, y };
+        this.team  = 0;   // 0 = neutral / wild, 1 = player, others = future teams
+        this.intents = { vel: { x: 0, y: 0 }, ab1: null };
+        this.target  = null;
+
+        this.alive   = true;
         this.inWorld = true;
-        this.range = 50;
-        this.maxHP=10; this.hp = 10; this.atk = 1;
+
+        this.range  = 50;
+        this.maxHP  = 10;
+        this.hp     = 10;
+        this.atk    = 1;
     }
-    applyIntent(){
-        //pretend its already validated
-        this.pos.x += this.intents.vel.x
-        this.pos.y += this.intents.vel.y
-        //also validated
+
+    applyIntent(world) {
+        // movement
+        this.pos.x += this.intents.vel.x;
+        this.pos.y += this.intents.vel.y;
+
+        // ability usage
         if (this.intents.ab1 && this.target) {
-            const dx = this.target.pos.x - this.pos.x;
-            const dy = this.target.pos.y - this.pos.y;
+            const dx   = this.target.pos.x - this.pos.x;
+            const dy   = this.target.pos.y - this.pos.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            if (dist <= this.range) { // Check if target is within range
+            if (dist <= this.range) {
                 this.processAbility(this.intents.ab1, this.target);
             } else {
                 console.log("Target out of range!");
             }
-            this.intents.ab1 = null; // Reset ability intent after processing
+            this.intents.ab1 = null;
         }
     }
+
     processAbility(abilityName, target) {
-        if (target && abilities[abilityName]) {
-            target.hp -= abilities[abilityName].atk; // Apply damage to the target
-            console.log(
-                `Entity at (${this.pos.x}, ${this.pos.y}) used ${abilityName} on target at (${target.pos.x}, ${target.pos.y}). Target HP: ${target.hp}`
-            );
-        }
+        if (!target) return;
+        const def = abilities[abilityName];
+        if (!def) return;
+
+        target.hp -= def.atk;
+        console.log(
+            `Entity at (${this.pos.x.toFixed(1)}, ${this.pos.y.toFixed(1)}) ` +
+            `used ${abilityName} on target at (${target.pos.x.toFixed(1)}, ${target.pos.y.toFixed(1)}). ` +
+            `Target HP: ${target.hp}`
+        );
     }
-    tick(){
-        if (this.alive){
-            this.applyIntent();
-            this.checkAlive();
-        } else {
-            captureListen(this);
-        }
-    }
-    checkAlive(){
-        if (this.hp <= 0){
-            this.alive = false
+
+    checkAlive() {
+        if (this.hp <= 0) {
+            this.alive = false;
         }
         return this.alive;
     }
-    draw(){
-        ctx.fillRect(this.pos.x - hsize, this.pos.y - hsize, size, size)
+
+    update(world) {
+        if (this.alive) {
+            this.applyIntent(world);
+            this.checkAlive();
+        } else {
+            captureListen(world, this); // capture logic for neutral entities
+        }
+    }
+
+    draw(ctx) {
+        ctx.fillRect(this.pos.x - HSIZE, this.pos.y - HSIZE, SIZE, SIZE);
     }
 }
+
 class Bot {
     constructor(entity) {
         this.e = entity;
+
+        // Filled by Player for active pet; otherwise left as zero and AI takes over
         this.commandedIntent = { vel: { x: 0, y: 0 }, ab1: null };
+
+        // Reserved if you want to expose decision to debug, currently unused
         this.outputIntent = { vel: { x: 0, y: 0 }, ab1: null };
+
         this.bestTarget = null;
     }
-    exampletick() {
-        if (this.commandedIntent.vel.x == 0 && this.commandedIntent.vel.y == 0) {
+
+    tick(world) {
+        // Movement: if player didn't command, wander randomly
+        if (this.commandedIntent.vel.x === 0 && this.commandedIntent.vel.y === 0) {
             this.e.intents.vel.x = Math.random() - 0.5;
             this.e.intents.vel.y = Math.random() - 0.5;
         } else {
             this.e.intents.vel.x = this.commandedIntent.vel.x;
             this.e.intents.vel.y = this.commandedIntent.vel.y;
         }
-        this.findTarget();
+
+        // Choose target
+        this.findTarget(world);
         this.e.target = this.bestTarget;
 
-        if (this.bestTarget != null) {
-            const dx = this.bestTarget.pos.x - this.e.pos.x;
-            const dy = this.bestTarget.pos.y - this.e.pos.y;
+        // Ability usage: only if commanded and target in range
+        if (this.bestTarget && this.commandedIntent.ab1) {
+            const dx   = this.bestTarget.pos.x - this.e.pos.x;
+            const dy   = this.bestTarget.pos.y - this.e.pos.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            if (dist <= this.e.range && this.commandedIntent.ab1) {
-                this.e.intents.ab1 = "example"; // Assign ability to entity's intent
+            if (dist <= this.e.range) {
+                this.e.intents.ab1 = "example";
             }
         }
 
+        // Consume commanded intent each tick
         this.commandedIntent = { vel: { x: 0, y: 0 }, ab1: null };
-        this.outputIntent = { vel: { x: 0, y: 0 }, ab1: null };
+        this.outputIntent    = { vel: { x: 0, y: 0 }, ab1: null };
     }
 
-    findTarget() {
-        // Find closest enemy
+    findTarget(world) {
         let closestDist = Infinity;
         this.bestTarget = null;
+
         for (let i = 0; i < world.entities.length; i++) {
             const potentialTarget = world.entities[i];
-            if (potentialTarget.team != this.e.team) {
-                const dx = potentialTarget.pos.x - this.e.pos.x;
-                const dy = potentialTarget.pos.y - this.e.pos.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < closestDist) {
-                    closestDist = dist;
-                    this.bestTarget = potentialTarget;
-                }
+            if (potentialTarget === this.e) continue;
+            if (potentialTarget.team === this.e.team) continue;
+
+            const dx   = potentialTarget.pos.x - this.e.pos.x;
+            const dy   = potentialTarget.pos.y - this.e.pos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < closestDist) {
+                closestDist   = dist;
+                this.bestTarget = potentialTarget;
             }
         }
     }
 }
-class RosterSystem{
-    constructor(){
+
+class RosterSystem {
+    constructor() {
         this.maxSlots = 3;
-        this.members = [];
+        this.members  = [];   // each member is an Entity in this prototype
     }
-    canAdd(){
+
+    canAdd() {
         return this.members.length < this.maxSlots;
     }
-    addFromEntity(entity){
+
+    addFromEntity(entity) {
         if (!this.canAdd()) return false;
         this.members.push(entity);
         return true;
     }
 }
-class StorageSystem{
-    constructor(){
+
+class StorageSystem {
+    constructor() {
         this.maxSlots = 50;
-        this.members = []
+        this.members  = [];
     }
-    canAdd(){
+
+    canAdd() {
         return this.members.length < this.maxSlots;
     }
-    addFromEntity(entity){
+
+    addFromEntity(entity) {
         if (!this.canAdd()) return false;
         this.members.push(entity);
         return true;
     }
 }
-function captureListen(entity){
-    //entity is dead, check for player proximity to capture
-    if (entity.team != 0) return; //only capture neutral entities
-    const playerPos = world.player.pos;
-    const dx = playerPos.x - entity.pos.x;
-    const dy = playerPos.y - entity.pos.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < 20){
-        const canAddR = world.player.roster.canAdd();
-        const canAddS = world.player.storage.canAdd();
-        if (!canAddR && !canAddS) return; //nowhere to put it
-        if (canAddR){
-            world.player.roster.addFromEntity(entity);
-        } else if (canAddS){
-            world.player.storage.addFromEntity(entity);
-        }
-        entity.inWorld = false
-        const idx = world.entities.indexOf(entity);
-        if (idx > -1){
-            world.entities.splice(idx, 1);
-        }
-        for (let i = 0; i < world.bots.length; i++){
-            if (world.bots[i].e === entity){
-                world.bots.splice(i, 1);
-                break;
-            }
-        }
+
+class Player {
+    constructor(x, y) {
+        this.pos       = { x, y };
+        this.inventory = [];
+        this.roster    = new RosterSystem();
+        this.storage   = new StorageSystem();
+
+        // Filled each frame from global commands
+        this.commands = {
+            player: { x: 0, y: 0 },
+            entity: { x: 0, y: 0 },
+            ab1: null,
+        };
+
+        this.activeEntity    = null;
+        this.activeEntityBot = null;
     }
-    //store in player roster or storage, take out of world
+
+    update(commands, world) {
+        // Copy the per-frame command state into the player
+        this.commands.player.x = commands.player.x;
+        this.commands.player.y = commands.player.y;
+        this.commands.entity.x = commands.entity.x;
+        this.commands.entity.y = commands.entity.y;
+        this.commands.ab1      = commands.ab1;
+
+        this.sendCommandToPet();
+        this.moveSelf();
+    }
+
+    sendCommandToPet() {
+        if (!this.activeEntityBot) return;
+
+        this.activeEntityBot.commandedIntent.vel.x = this.commands.entity.x;
+        this.activeEntityBot.commandedIntent.vel.y = this.commands.entity.y;
+        this.activeEntityBot.commandedIntent.ab1   = this.commands.ab1 ? "example" : null;
+    }
+
+    moveSelf() {
+        this.pos.x += this.commands.player.x;
+        this.pos.y += this.commands.player.y;
+    }
+
+    draw(ctx) {
+        ctx.fillRect(this.pos.x - HSIZE, this.pos.y - HSIZE, SIZE, SIZE);
+    }
 }
-function toggleRosterEntity(slotIndex){
-    const player = world.player;
-    const member = player.roster.members[slotIndex]
-    if (!member) return;
-    if (!member.inWorld){
-        member.inWorld = true;
-        member.team = 1
-        member.pos.x = player.pos.x + 10
-        member.pos.y = player.pos.y + 10
-        world.entities.push(member)
-        const bot = new Bot(member)
-        world.bots.push(bot)
-        if (!player.activeEntity){
-            player.activeEntity = member;
-            player.activeEntityBot = bot;
+
+/* ==============================
+   WORLD
+   ============================== */
+
+class World {
+    constructor() {
+        this.player          = null;
+        this.entities        = [];
+        this.bots            = [];
+        this.renderList      = [];
+        this.debugRenderList = [];
+    }
+
+    setPlayer(player) {
+        this.player = player;
+    }
+
+    addEntity(entity, withBot = false, team = 0) {
+        entity.team = team;
+        entity.inWorld = true;
+        this.entities.push(entity);
+
+        if (withBot) {
+            const bot = new Bot(entity);
+            this.bots.push(bot);
+            return bot;
         }
-    } else {
-        member.inWorld = false;
-        const idx = world.entities.indexOf(member);
-        if (idx > -1){
-            world.entities.splice(idx, 1);
-        }
-        for (let i = 0; i < world.bots.length; i++){
-            if (world.bots[i].e === member){
-                if (player.activeEntity === member){
-                    player.activeEntity = null;
-                    player.activeEntityBot = null;
+        return null;
+    }
+
+    // Bring a roster entity in/out of the world
+    toggleRosterEntity(slotIndex) {
+        if (!this.player) return;
+        const roster = this.player.roster;
+        const member = roster.members[slotIndex];
+        if (!member) return;
+
+        if (!member.inWorld) {
+            // Bring out
+            member.inWorld = true;
+            member.team    = 1;
+
+            // Spawn near player
+            member.pos.x = this.player.pos.x + 16 * (slotIndex + 1);
+            member.pos.y = this.player.pos.y;
+
+            this.entities.push(member);
+            const bot = new Bot(member);
+            this.bots.push(bot);
+
+            if (!this.player.activeEntity) {
+                this.player.activeEntity    = member;
+                this.player.activeEntityBot = bot;
+            }
+        } else {
+            // Recall
+            member.inWorld = false;
+
+            this.entities = this.entities.filter(e => e !== member);
+
+            for (let i = 0; i < this.bots.length; i++) {
+                if (this.bots[i].e === member) {
+                    if (this.player.activeEntityBot === this.bots[i]) {
+                        this.player.activeEntity    = null;
+                        this.player.activeEntityBot = null;
+                    }
+                    this.bots.splice(i, 1);
+                    break;
                 }
-                world.bots.splice(i, 1);
-                break;
             }
         }
+    }
 
+    update(commands) {
+        if (!this.player) return;
+
+        // Player updates movement + pushes commands into active pet
+        this.player.update(commands, this);
+
+        // Handle “bring roster slot X out / recall” as a one-frame pulse
+        if (commands.bringSlot !== null) {
+            this.toggleRosterEntity(commands.bringSlot);
+        }
+
+        // Bot AI
+        for (let i = 0; i < this.bots.length; i++) {
+            this.bots[i].tick(this);
+        }
+
+        // Entity updates
+        for (let i = 0; i < this.entities.length; i++) {
+            this.entities[i].update(this);
+        }
+
+        // Post-process: remove dead non-neutral entities from world
+        this.entities = this.entities.filter(e => e.alive || e.team === 0);
+
+        // You can also prune dead bots if their entity died
+        this.bots = this.bots.filter(b => b.e.alive);
+    }
+
+    render(ctx) {
+        if (this.player) {
+            this.player.draw(ctx);
+        }
+
+        this.renderList = this.entities;
+        for (let i = 0; i < this.renderList.length; i++) {
+            this.renderList[i].draw(ctx);
+        }
+    }
+
+    debugUI(ctx) {
+        for (let i = 0; i < this.debugRenderList.length; i++) {
+            ctx.fillText(this.debugRenderList[i].info, 30, 30 + i * 20);
+        }
     }
 }
-const abilities = {
-    example: {cd: 1, atk: 1, type:"meleeAutoTarget"},
+
+/* ==============================
+   CAPTURE SYSTEM
+   ============================== */
+
+function captureListen(world, entity) {
+    // Only capture neutral entities (team 0). Others just stay dead or get cleaned up.
+    if (entity.team !== 0) return;
+
+    const playerPos = world.player.pos;
+    const dx   = playerPos.x - entity.pos.x;
+    const dy   = playerPos.y - entity.pos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist >= 20) return;
+
+    const roster = world.player.roster;
+    const storage = world.player.storage;
+
+    const canAddR = roster.canAdd();
+    const canAddS = storage.canAdd();
+    if (!canAddR && !canAddS) {
+        console.log("No space in roster or storage.");
+        return;
+    }
+
+    if (canAddR) {
+        roster.addFromEntity(entity);
+        console.log("Captured entity -> roster slot", roster.members.length - 1);
+    } else {
+        storage.addFromEntity(entity);
+        console.log("Captured entity -> storage");
+    }
+
+    entity.inWorld = false;
+
+    // Remove from world.entities
+    const idx = world.entities.indexOf(entity);
+    if (idx > -1) {
+        world.entities.splice(idx, 1);
+    }
+
+    // Remove any bot controlling it
+    for (let i = 0; i < world.bots.length; i++) {
+        if (world.bots[i].e === entity) {
+            world.bots.splice(i, 1);
+            break;
+        }
+    }
 }
-function spawnCircle(x, y, radius, numEntities){
+
+/* ==============================
+   SPAWN HELPERS
+   ============================== */
+
+function spawnCircle(world, x, y, radius, numEntities) {
     const angleIncrement = (2 * Math.PI) / numEntities;
-    for (let i = 0; i < numEntities; i++){
-        const angle = i * angleIncrement;
-        const entityX = x + radius * Math.cos(angle);
-        const entityY = y + radius * Math.sin(angle);
-        const entity = new Entity(entityX, entityY);
-        const bot = new Bot(entity);
-        world.bots.push(bot);
-        world.entities.push(entity);
+    for (let i = 0; i < numEntities; i++) {
+        const angle   = i * angleIncrement;
+        const ex      = x + radius * Math.cos(angle);
+        const ey      = y + radius * Math.sin(angle);
+        const entity  = new Entity(ex, ey);
+        world.addEntity(entity, true, 0); // neutral, with bot wandering
     }
 }
 
-const world = new World();
-worldListener = world
-const player = new Player(400,400);
-const entity = new Entity(410,400);
-entity.team = 1;
-world.entities.push(entity);
-world.player = player;
-const bot = new Bot(entity);
-world.bots.push(bot);
-player.activeEntity = entity;
-player.activeEntityBot = bot;
-spawnCircle(400,400,50,3);
+/* ==============================
+   BOOTSTRAP + GAME LOOP
+   ============================== */
 
-function gameLoop(){
-    ctx.clearRect(0,0,canvas.width, canvas.height)
-    //update world
-    world.player.commands = commands;
-    world.player.tick();
-    if (commands.bringEntity1Out) toggleRosterEntity(0);
-    if (commands.bringEntity2Out) toggleRosterEntity(1);
-    if (commands.bringEntity3Out) toggleRosterEntity(2);
-    for (let i = 0; i < world.bots.length; i++){
-        world.bots[i].exampletick();
-    }
-    for (let i = 0; i < world.entities.length; i++){
-        world.entities[i].tick();
-    }
+// Create world and player
+world = new World();
+const player = new Player(400, 400);
+world.setPlayer(player);
 
-    //draw world
-    world.render();
-    world.debugUI();
-    //reset commands
-    commands = {player:{x:0,y:0}, entity:{x:0,y:0}, ab1: false,
-    bringEntity1Out:commands.bringEntity1Out, bringEntity2Out:commands.bringEntity2Out, bringEntity3Out:commands.bringEntity3Out}
+// Create a player-owned pet and add it BOTH to world and to roster slot 0
+const petEntity = new Entity(410, 400);
+petEntity.team = 1;
+const petBot = world.addEntity(petEntity, true, 1);
+
+// Put this pet into roster slot 0 and mark as inWorld (already in world)
+player.roster.addFromEntity(petEntity);
+petEntity.inWorld = true;
+
+// Wire active pet to player controls
+player.activeEntity    = petEntity;
+player.activeEntityBot = petBot;
+
+// Spawn some neutral enemies around
+spawnCircle(world, 400, 400, 50, 3);
+
+// Main loop
+function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    world.update(commands);
+    world.render(ctx);
+    world.debugUI(ctx);
+
+    // Commands are per-frame pulses
+    resetCommands();
+
     requestAnimationFrame(gameLoop);
 }
 requestAnimationFrame(gameLoop);
