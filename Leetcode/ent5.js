@@ -50,7 +50,36 @@ const math = {
         return Math.max(a, Math.min(b, v));
     },
 };
+function shape(x, z, seed = 0) {
+    // returns base biome scalar(s)
+    const noise = math.fbm(x * 0.001, z * 0.001, 5);
+    return noise;
+}
 
+function weightsAtCell(x, z, seed = 0) {
+    // convert shape values to biome weights
+    const s = this.shape(x, z, seed);
+    // trivial partition
+    return {
+        desert: math.clamp((s - 0.6) / 0.4, 0, 1),
+        plains: math.clamp((s - 0.25) / 0.35, 0, 1),
+        tundra: math.clamp((0.4 - s) / 0.4, 0, 1),
+    };
+}
+function biomeMix(x, z, seed = 0) {
+    const w = weightsAtCell(x, z, seed); 
+    // normalize
+    const sum = (w.desert + w.plains + w.tundra) || 1;
+    return {
+        desert: w.desert / sum,
+        plains: w.plains / sum,
+        tundra: w.tundra / sum,
+    };
+}
+function heightfieldSample(x, z, seed = 0) {
+    const h = math.fbm(x * 0.0007 + seed * 1.1, z * 0.0007 - seed * 0.7, 6);
+    return Math.floor(h * 200);
+}
 const biomeData = {
     biomeList: {
         desert: "desert",
@@ -90,8 +119,8 @@ class Chunk{
             for (let z = 0; z < this.size; z++) {
                 const wx = this.cx * this.size + x;
                 const wz = this.cz * this.size + z;
-                const h = world.heightfieldSample(wx, wz, seed);
-                this.blocks[x][z] = { height: h, biome: world.biomes.biomeMix(wx, wz, seed) };
+                const h = heightfieldSample(wx, wz, seed);
+                this.blocks[x][z] = { height: h, biome: biomeMix(wx, wz, seed) };
             }
         }
         this.generated = true;
@@ -109,7 +138,7 @@ class ChunkManager{
     getChunk(cx, cz) {
         const k = this.key(cx, cz);
         if (!this.chunks.has(k)) {
-            const c = new world.Chunk(cx, cz);
+            const c = new Chunk(cx, cz, chunkParams.chunk.size);
             this.chunks.set(k, c);
         }
         return this.chunks.get(k);
@@ -350,17 +379,17 @@ class MorphService{
     }
 }
 class Player{
-    constructor(pos){
+    constructor(pos = {x:100, y:100, z:100}){
         this.playerID = 1;
         this.pos = pos;
     }
-    // starterPick(){}
-    //     mapCommandsToIntent(playerInput) {
-    //     return { move: playerInput.move || null, ability: playerInput.ability || null };
-    // }
+    starterPick(){}
+        mapCommandsToIntent(playerInput) {
+        return { move: playerInput.move || null, ability: playerInput.ability || null };
+    }
     // collectWildCreature(spawnDescriptor) {
     //     const spec = entities.data_families.species[spawnDescriptor.species] || {};
-    //     const c = new entities.Creature({
+    //     const c = new Creature({
     //         id: `wild:${Date.now()}`,
     //         species: spawnDescriptor.species,
     //         level: spec.baseLevel || 1,
@@ -375,6 +404,102 @@ class Player{
     //     if (effectFn) return effectFn(actor);
     //     return null;
     // }
+}
+class Creature{
+    constructor({ id, species, level = 1, x = 0, z = 0, type = 'roster' } = {}) {
+        this.id = id || `creature:${Date.now()}`;
+        this.species = species || 'unknown';
+        this.level = level;
+        this.x = x;
+        this.z = z;
+        this.intent = null;
+        this.type = type; // 'wild' | 'roster' | 'boss'
+        this.effects = new Effects();
+        this.cooldowns = new Cooldowns();
+        this.moveset = base_movesets[this.species] || [];
+        this.initialize(species)
+    }
+    initialize(spc){
+        const rng = math.rng(this.id.length + this.level);
+        const spec = species[spc] || {};
+        const familyKey = spec.family
+        const fam = families[spec.family] || {};
+        this.size = fam.baseSize * (1 + (rng() - 0.5) * 0.1 * (spec.sizeVariation || 1));
+        const innateVariationRNG = (multiplier) => Math.floor((rng() - 0.5) * 2 * multiplier);
+        this.innateStats = {
+            hp: innateVariationRNG(spec.ivVariationMultiplier || 5),
+            pAtk: innateVariationRNG(spec.ivVariationMultiplier || 5),
+            eAtk: innateVariationRNG(spec.ivVariationMultiplier || 5),
+            pDef: innateVariationRNG(spec.ivVariationMultiplier || 5),
+            spd: innateVariationRNG(spec.ivVariationMultiplier || 5),
+        };
+        this.baseStats = {
+            hp: (fam.baseStats.hp || 10) + (fam.growthStats.hp || 2) * (this.level - 1),
+            pAtk: (fam.baseStats.pAtk || 5) + (fam.growthStats.pAtk || 1) * (this.level - 1),
+            eAtk: (fam.baseStats.eAtk || 5) + (fam.growthStats.eAtk || 1) * (this.level - 1),
+            pDef: (fam.baseStats.pDef || 5) + (fam.growthStats.pDef || 1) * (this.level - 1),
+            spd: (fam.baseStats.spd || 5) + (fam.growthStats.spd || 1) * (this.level - 1),
+        };
+        this.stats = {
+            hp: this.baseStats.hp + this.innateStats.hp,
+            pAtk: this.baseStats.pAtk + this.innateStats.pAtk,
+            eAtk: this.baseStats.eAtk + this.innateStats.eAtk,
+            pDef: this.baseStats.pDef + this.innateStats.pDef,
+            spd: this.baseStats.spd + this.innateStats.spd,
+        };
+    }
+    initializeComposites(fam){
+        const speciesData = families.species[this.species]
+        const familyKey = species.family
+        const family = fam || families.families[familyKey];
+        const outerComposite = family.baseComposites.in
+        const innerComposite = family.baseComposites.out
+        this.morphStage = 0;
+        this.composites = { inner: innerComposite, outer: outerComposite };
+        
+        let immunes = []
+        const temperatureBase = ((innerComposite.tempBase + outerComposite.tempBase) / 2);
+        if (temperatureBase == 1) immunes.push('burning');
+        if (temperatureBase == 0) immunes.push('freezing');
+        if (outerComposite.electricHurt == 0.0 && innerComposite.electricHurt == 0.0) immunes.push('electricity');
+        if (outerComposite.waterHurt == 0.0 && innerComposite.waterHurt == 0.0) immunes.push('water');
+        if (outerComposite.chemHurt == 0.0 && innerComposite.chemHurt == 0.0) immunes.push('toxic');
+
+        this.soakCapacities = {
+            heatCap: (0.5 + temperatureBase) * this.size,
+            coldCap: (0.5 + (1 - temperatureBase)) * this.size,                
+            electricityCap: (innerComposite.electricBase) * this.size,
+            waterCap: (outerComposite.porous) * this.size,
+        }
+        this.capacityHurtScale = {
+            heatHurtScale: temperatureBase >= 0.5 ? 1 + (innerComposite.tempHurt + outerComposite.tempHurt) / 2 : 1,
+            coldHurtScale: temperatureBase < 0.5 ? 1 + (innerComposite.tempHurt + outerComposite.tempHurt) / 2 : 1,
+            electricityHurtScale: 1 + (innerComposite.electricHurt + outerComposite.electricHurt) / 2,
+            waterHurtScale: 1 + (innerComposite.waterHurt + outerComposite.waterHurt) / 2,
+            chemicalHurtScale: 1 + (innerComposite.chemHurt + outerComposite.chemHurt) / 2,
+        }
+        this.immunities = immunes;
+    }
+    setIntent(intent) {
+        this.intent = intent;
+    }
+
+    tick(dt) {
+        // apply effects and cooldown ticks
+        this.effects.tick(dt);
+        this.cooldowns.tick(dt);
+        // movement/ability processing happens in services
+    }
+}
+class Bot{
+    constructor(creature) {
+        this.creature = creature;
+        this.mode = "auto"; //wild must be autonomous,
+        //roster switches between autonomous, fully manual, or have auto movement with ability commands
+    }
+    decide(worldState) {
+        this.creature.intent = { move: null, ability: null };
+    }
 }
 
 class Projectile{
@@ -432,7 +557,7 @@ class AbilityTranslater{
             case 'projectile':
                 return {
                     type: 'spawnProjectile',
-                    projectile: new entities.Projectile({
+                    projectile: new Projectile({
                         x: owner.x,
                         z: owner.z,
                         vx: Math.sign((target?.x ?? owner.x) - owner.x) || 1,
@@ -444,7 +569,7 @@ class AbilityTranslater{
             case 'area':
                 return {
                     type: 'spawnArea',
-                    area: new entities.AreaEffects({
+                    area: new AreaEffects({
                         x: target?.x ?? owner.x,
                         z: target?.z ?? owner.z,
                         radius: def.radius,
@@ -497,6 +622,7 @@ class WorldManager{
 class World{
     constructor(seed = 0){
         this.seed = seed;
+        this.player = new Player();
         this.players = new Map();
         this.entities = new Map();
         this.worldEntities = new Set();
@@ -516,7 +642,7 @@ class World{
     spawnEntity(e) {
         if (e.id == null) e.id = `entity:${Date.now()}:${Math.random().toString(36).slice(2)}`;
         this.entities.set(e.id, e);
-        if (e instanceof entities.Projectile || e instanceof entities.AreaEffects) {
+        if (e instanceof Projectile || e instanceof AreaEffects) {
             this.worldEntities.add(e);
         }
         return e;
@@ -528,15 +654,15 @@ class World{
     }
 
     processPlayerInput(player, dt) {
-        const intent = entities.mapCommandsToIntent(player.input || {});
+        const intent = this.player.mapCommandsToIntent(player.input || {});
         player.intent = intent;
     }
 
     processEntities(dt) {
         for (const ent of this.entities.values()) {
-            if (ent instanceof entities.Creature) {
+            if (ent instanceof Creature) {
                 if (ent.mode === 'wild' && !ent.intent) {
-                    const bot = new entities.Bot(ent);
+                    const bot = new Bot(ent);
                     bot.decide(this);
                 }
                 ent.tick(dt);
@@ -554,10 +680,10 @@ class World{
     processWorldEntities(dt) {
         for (const we of Array.from(this.worldEntities)) {
             if (we.tick) we.tick(dt);
-            if (we instanceof entities.AreaEffects && we.isExpired()) {
+            if (we instanceof AreaEffects && we.isExpired()) {
                 this.removeEntity(we);
             }
-            if (we instanceof entities.Projectile && !we.alive) {
+            if (we instanceof Projectile && !we.alive) {
                 this.removeEntity(we);
             }
         }
@@ -566,8 +692,8 @@ class World{
     tick(dt = 1 / 60) {
         for (const player of this.players.values()) {
             this.processPlayerInput(player, dt);
-            const cx = Math.floor(player.position.x / 16);
-            const cz = Math.floor(player.position.z / 16);
+            const cx = Math.floor(player.pos.x / 16);
+            const cz = Math.floor(player.pos.z / 16);
             this.chunkManager.updateNearby(cx, cz, 2, this.seed);
         }
         this.processEntities(dt);
@@ -584,7 +710,7 @@ class SceneManager{
     }
     starterEntitySetup(playerId){
         if (!this.playerMemory.has(playerId)) {
-            const starterCreature = new entities.Creature({
+            const starterCreature = new Creature({
                 id: `creature:${playerId}:starter`,
                 species: 'dog',
                 level: 1,
@@ -605,12 +731,25 @@ function fastJSRender(){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     // Simple rendering of entities
     for (const ent of world.entities.values()) {
-        if (ent instanceof entities.Creature) {
+        if (ent instanceof Creature) {
             ctx.fillStyle = 'blue';
             ctx.fillRect(ent.x % canvas.width, ent.z % canvas.height, 5, 5);
         }
     }
 }
+
+const player = new Player({ x: 0, z: 0 });
+world.addPlayer(player);
+const starterCreature = new Creature({
+    id: `creature:${player.playerID}:starter`,
+    species: 'dog',
+    level: 1,
+    x: 0,
+    z: 0,
+    type: 'roster',
+});
+world.spawnEntity(starterCreature);
+
 setInterval(() => {
     world.tick(1 / world.tickRate);
     fastJSRender();
