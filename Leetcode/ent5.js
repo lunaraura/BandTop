@@ -58,7 +58,7 @@ function shape(x, z, seed = 0) {
 
 function weightsAtCell(x, z, seed = 0) {
     // convert shape values to biome weights
-    const s = this.shape(x, z, seed);
+    const s = shape(x, z, seed);
     // trivial partition
     return {
         desert: math.clamp((s - 0.6) / 0.4, 0, 1),
@@ -379,8 +379,8 @@ class MorphService{
     }
 }
 class Player{
-    constructor(pos = {x:100, y:100, z:100}){
-        this.playerID = 1;
+    constructor(pos = {x:100, y:100, z:100}, id ){
+        this.id = id;
         this.pos = pos;
     }
     starterPick(){}
@@ -488,14 +488,12 @@ class Creature{
         // apply effects and cooldown ticks
         this.effects.tick(dt);
         this.cooldowns.tick(dt);
-        // movement/ability processing happens in services
     }
 }
 class Bot{
     constructor(creature) {
         this.creature = creature;
         this.mode = "auto"; //wild must be autonomous,
-        //roster switches between autonomous, fully manual, or have auto movement with ability commands
     }
     decide(worldState) {
         this.creature.intent = { move: null, ability: null };
@@ -622,7 +620,7 @@ class WorldManager{
 class World{
     constructor(seed = 0){
         this.seed = seed;
-        this.player = new Player();
+        this.player = new Player({x:0,y:0,z:0}, 1);
         this.players = new Map();
         this.entities = new Map();
         this.worldEntities = new Set();
