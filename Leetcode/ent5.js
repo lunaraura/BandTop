@@ -355,9 +355,9 @@ class Cooldowns{
     }
     tick(dt) {
         for (const [k, v] of this.map.entries()) {
-            v -= dt;
-            if (v <= 0) this.map.delete(k);
-            else this.map.set(k, v);
+            const nv = v - dt;
+            if (nv <= 0) this.map.delete(k);
+            else this.map.set(k, nv);
         }
     }
     ready(key) {
@@ -447,49 +447,56 @@ class Creature{
             pDef: this.baseStats.pDef + this.innateStats.pDef,
             spd: this.baseStats.spd + this.innateStats.spd,
         };
+        // current HP tracked independently (used by CombatManager)
+        this.currentHp = this.stats.hp;
     }
     initializeComposites(fam){
-        const speciesData = families.species[this.species]
-        const familyKey = species.family
-        const family = fam || families.families[familyKey];
-        const outerComposite = family.baseComposites.in
-        const innerComposite = family.baseComposites.out
-        this.morphStage = 0;
-        this.composites = { inner: innerComposite, outer: outerComposite };
-        
-        let immunes = []
-        const temperatureBase = ((innerComposite.tempBase + outerComposite.tempBase) / 2);
-        if (temperatureBase == 1) immunes.push('burning');
-        if (temperatureBase == 0) immunes.push('freezing');
-        if (outerComposite.electricHurt == 0.0 && innerComposite.electricHurt == 0.0) immunes.push('electricity');
-        if (outerComposite.waterHurt == 0.0 && innerComposite.waterHurt == 0.0) immunes.push('water');
-        if (outerComposite.chemHurt == 0.0 && innerComposite.chemHurt == 0.0) immunes.push('toxic');
+        // Resolve species -> family -> composite objects
+        const speciesData = (typeof globalThis !== 'undefined' ? globalThis : window);
+        // use the module-level 'species' mapping
+        const specData = (typeof species !== 'undefined') ? species[this.species] || {} : {};
+        const familyKey = specData.family;
+        const family = fam || (familyKey ? (families[familyKey] || {}) : {});
+        const innerName = family.baseComposites?.in;
+        const outerName = family.baseComposites?.out;
+        const innerComposite = innerName ? (composites[innerName] || {}) : {};
+        const outerComposite = outerName ? (composites[outerName] || {}) : {};
+         this.morphStage = 0;
+         this.composites = { inner: innerComposite, outer: outerComposite };
+         
+         let immunes = []
+        const temperatureBase = ((innerComposite.tempBase || 0.5) + (outerComposite.tempBase || 0.5)) / 2;
+         if (temperatureBase == 1) immunes.push('burning');
+         if (temperatureBase == 0) immunes.push('freezing');
+         if ((outerComposite.electricHurt || 0) === 0 && (innerComposite.electricHurt || 0) === 0) immunes.push('electricity');
+         if ((outerComposite.waterHurt || 0) === 0 && (innerComposite.waterHurt || 0) === 0) immunes.push('water');
+         if ((outerComposite.chemHurt || 0) === 0 && (innerComposite.chemHurt || 0) === 0) immunes.push('toxic');
 
-        this.soakCapacities = {
-            heatCap: (0.5 + temperatureBase) * this.size,
-            coldCap: (0.5 + (1 - temperatureBase)) * this.size,                
-            electricityCap: (innerComposite.electricBase) * this.size,
-            waterCap: (outerComposite.porous) * this.size,
-        }
-        this.capacityHurtScale = {
-            heatHurtScale: temperatureBase >= 0.5 ? 1 + (innerComposite.tempHurt + outerComposite.tempHurt) / 2 : 1,
-            coldHurtScale: temperatureBase < 0.5 ? 1 + (innerComposite.tempHurt + outerComposite.tempHurt) / 2 : 1,
-            electricityHurtScale: 1 + (innerComposite.electricHurt + outerComposite.electricHurt) / 2,
-            waterHurtScale: 1 + (innerComposite.waterHurt + outerComposite.waterHurt) / 2,
-            chemicalHurtScale: 1 + (innerComposite.chemHurt + outerComposite.chemHurt) / 2,
-        }
-        this.immunities = immunes;
-    }
-    setIntent(intent) {
-        this.intent = intent;
-    }
-
-    tick(dt) {
-        // apply effects and cooldown ticks
-        this.effects.tick(dt);
-        this.cooldowns.tick(dt);
-    }
-}
+         this.soakCapacities = {
+             heatCap: (0.5 + temperatureBase) * this.size,
+             coldCap: (0.5 + (1 - temperatureBase)) * this.size,                
+             electricityCap: (innerComposite.electricBase) * this.size,
+             waterCap: (outerComposite.porous) * this.size,
+         }
+         this.capacityHurtScale = {
+             heatHurtScale: temperatureBase >= 0.5 ? 1 + (innerComposite.tempHurt + outerComposite.tempHurt) / 2 : 1,
+             coldHurtScale: temperatureBase < 0.5 ? 1 + (innerComposite.tempHurt + outerComposite.tempHurt) / 2 : 1,
+             electricityHurtScale: 1 + (innerComposite.electricHurt + outerComposite.electricHurt) / 2,
+             waterHurtScale: 1 + (innerComposite.waterHurt + outerComposite.waterHurt) / 2,
+             chemicalHurtScale: 1 + (innerComposite.chemHurt + outerComposite.chemHurt) / 2,
+         }
+         this.immunities = immunes;
+     }
+     setIntent(intent) {
+         this.intent = intent;
+     }
+ 
+     tick(dt) {
+         // apply effects and cooldown ticks
+         this.effects.tick(dt);
+         this.cooldowns.tick(dt);
+     }
+ }
 class Bot{
     constructor(creature) {
         this.creature = creature;
@@ -590,7 +597,10 @@ class CombatManager{
         if (!action) return;
         switch (action.type) {
             case 'damage':
-                target.hp -= action.amount;
+                // apply to currentHp (defensive checks)
+                if (target && typeof target.currentHp === 'number') {
+                    target.currentHp = Math.max(0, target.currentHp - action.amount);
+                }
                 break;
             case 'spawnProjectile':
                 this.world.spawnEntity(action.projectile);
@@ -607,7 +617,7 @@ class CombatManager{
 }
 class WorldManager{
     constructor(world, lRadius){
-        this.world = null;
+        this.world = world || null;
         this.loadChunkRadius = lRadius;
     }
     grabPlayerLocation(){}
@@ -652,14 +662,17 @@ class World{
     }
 
     processPlayerInput(player, dt) {
-        const intent = this.player.mapCommandsToIntent(player.input || {});
-        player.intent = intent;
+        // use the passed player object (should be a Player instance)
+        const intent = (player && typeof player.mapCommandsToIntent === 'function')
+            ? player.mapCommandsToIntent(player.input || {})
+            : { move: null, ability: null };
+         player.intent = intent;
     }
 
     processEntities(dt) {
         for (const ent of this.entities.values()) {
             if (ent instanceof Creature) {
-                if (ent.mode === 'wild' && !ent.intent) {
+                if (ent.type === 'wild' && !ent.intent) {
                     const bot = new Bot(ent);
                     bot.decide(this);
                 }
@@ -698,57 +711,154 @@ class World{
         this.combat.tick(dt);
         this.processWorldEntities(dt);
 
-
-    }
-}
-class SceneManager{
-    constructor(){
-        this.playerMemory = new Map();
-        this.sceneData = new Map();
-    }
-    starterEntitySetup(playerId){
-        if (!this.playerMemory.has(playerId)) {
-            const starterCreature = new Creature({
-                id: `creature:${playerId}:starter`,
-                species: 'dog',
-                level: 1,
-                x: 0,
-                z: 0,
-                mode: 'roster',
-            });
-            this.playerMemory.set(playerId, { roster: [starterCreature] });
-        }
     }
 }
 
-const world = new World(12345);
+//setup starter pick
+//starter creature of either x, y, or z
+//begin world generation 
 
-function fastJSRender(){
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // Simple rendering of entities
-    for (const ent of world.entities.values()) {
-        if (ent instanceof Creature) {
-            ctx.fillStyle = 'blue';
-            ctx.fillRect(ent.x % canvas.width, ent.z % canvas.height, 5, 5);
-        }
+class Scene {
+    constructor() {
+        this.world = new World(12345);
+        this.stage = null;
+    }
+    starterPick(playerId, choice) {
+        const speciesMap = { x: 'dog', y: 'cat', z: 'lizard' };
+        const species = speciesMap[choice];
+        if (!species) return;
+        const creature = new Creature({ species, level: 1, type: 'roster' });
+        // create and register a Player instance so player methods exist
+        const player = new Player({ x: 0, y: 0, z: 0 }, playerId);
+        this.world.addPlayer(player);
+        this.world.spawnEntity(creature);
+        const rosterService = new RosterService();
+        rosterService.addToRoster(player.id, creature);
+    }
+    startGame() {
+        this.stage = 'playing';
     }
 }
 
-const player = new Player({ x: 0, z: 0 });
+const canvas = document.getElementById('game');
+canvas.width = innerWidth;
+canvas.height = innerHeight;
+const ctx = canvas.getContext('2d');
+
+// create scene / world from your file
+const scene = new Scene();
+const world = scene.world;
+
+// create player and starter creature (mirrors Scene.starterPick)
+const playerId = 'player1';
+const player = new Player({x:0,y:0,z:0}, playerId);
 world.addPlayer(player);
-const starterCreature = new Creature({
-    id: `creature:${player.playerID}:starter`,
-    species: 'dog',
-    level: 1,
-    x: 0,
-    z: 0,
-    type: 'roster',
-});
-world.spawnEntity(starterCreature);
 
-setInterval(() => {
-    world.tick(1 / world.tickRate);
-    fastJSRender();
-}, 1000 / world.tickRate);
+// spawn a roster creature and attach to player
+const starter = new Creature({ species: 'dog', level: 1, x: 0, z: 0, type: 'roster' });
+world.spawnEntity(starter);
+player.roster = [starter];            // simple link for demo
+player.activeCreatureId = starter.id; // runner will control this creature
+
+// input state
+const keys = { w:0,a:0,s:0,d:0, q:0 };
+window.addEventListener('keydown', e => { if (e.key) keys[e.key.toLowerCase()] = 1; });
+window.addEventListener('keyup', e => { if (e.key) keys[e.key.toLowerCase()] = 0; });
+
+// helper to get controlled creature
+function getActiveCreature() {
+    return world.entities.get(player.activeCreatureId) || null;
+}
+
+// convert keys to simple intent
+function updatePlayerIntent() {
+    const c = getActiveCreature();
+    if (!c) return;
+    let vx = 0, vz = 0;
+    if (keys.w) vz -= 1;
+    if (keys.s) vz += 1;
+    if (keys.a) vx -= 1;
+    if (keys.d) vx += 1;
+    // normalize
+    const L = Math.hypot(vx, vz) || 1;
+    vx /= L; vz /= L;
+    // set intent on creature so World.processEntities will apply it
+    c.intent = { move: { x: vx * 60, z: vz * 60 }, ability: null };
+    if (keys.q) {
+    // simple ability trigger: use 'bite' if available
+    c.intent.ability = { id: 'bite', target: null };
+    }
+}
+
+// simple render
+function render() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // camera just centers on active creature
+    const c = getActiveCreature();
+    const camX = c ? c.x : 0;
+    const camZ = c ? c.z : 0;
+
+    // draw grid for reference
+    ctx.strokeStyle = '#7d9ab7ff';
+    ctx.lineWidth = 1;
+    const scale = 2; // world -> screen scale
+    for (let gx = -1000; gx <= 1000; gx += 32) {
+    ctx.beginPath();
+    ctx.moveTo((gx - camX) * scale + canvas.width/2, 0);
+    ctx.lineTo((gx - camX) * scale + canvas.width/2, canvas.height);
+    ctx.stroke();
+    }
+
+    // draw creatures
+    for (const ent of world.entities.values()) {
+    if (ent instanceof Creature) {
+        const sx = (ent.x - camX) * scale + canvas.width/2;
+        const sz = (ent.z - camZ) * scale + canvas.height/2;
+        ctx.beginPath();
+        ctx.fillStyle = ent === c ? '#ffcc66' : '#66aaff';
+        const r = Math.max(4, (ent.size || 1) * 6);
+        ctx.arc(sx, sz, r, 0, Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.fillText(ent.species + ' ' + Math.round(ent.currentHp || ent.stats.hp), sx - r, sz - r - 6);
+    }
+    }
+
+    // draw worldEntities (projectiles / areas)
+    for (const we of world.worldEntities) {
+    if (we instanceof Projectile) {
+        const sx = (we.x - camX) * scale + canvas.width/2;
+        const sz = (we.z - camZ) * scale + canvas.height/2;
+        ctx.fillStyle = '#ff4444';
+        ctx.beginPath();
+        ctx.arc(sx, sz, 3, 0, Math.PI*2);
+        ctx.fill();
+    } else if (we instanceof AreaEffects) {
+        const sx = (we.x - camX) * scale + canvas.width/2;
+        const sz = (we.z - camZ) * scale + canvas.height/2;
+        ctx.strokeStyle = 'rgba(255,100,0,0.4)';
+        ctx.beginPath();
+        ctx.arc(sx, sz, we.radius * scale, 0, Math.PI*2);
+        ctx.stroke();
+    }
+    }
+}
+
+// game loop
+let last = performance.now();
+function frame() {
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+
+    updatePlayerIntent();
+    // world.tick expects dt in seconds
+    world.tick(dt);
+
+    render();
+    requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// resize handling
+window.addEventListener('resize', () => { canvas.width = innerWidth; canvas.height = innerHeight; });
