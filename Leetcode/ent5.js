@@ -366,7 +366,8 @@ function spawnCircle(world, x, y, radius, numEntities) {
 // ...existing code...
 class Scene {
     constructor() {
-        this.scenes = [];           // { name, init?, loop? }
+        this.world = null;
+        this.scenes = []; 
         this.currentSceneLoop = () => {};
         this.currentIndex = -1;
         this.switchScene = this.switchScene.bind(this);
@@ -376,71 +377,86 @@ class Scene {
         this.scenes.push({ name, init, loop });
         return this.scenes.length - 1;
     }
-
-// ...existing code...
     switchScene(indexOrName) {
         let idx = (typeof indexOrName === "number")
             ? indexOrName
             : this.scenes.findIndex(s => s.name === indexOrName);
         if (idx < 0 || idx >= this.scenes.length) return;
-        const scene = this.scenes[idx];
-        // run init once on switch (if provided)
-        if (typeof scene.init === "function") scene.init(this); // <-- pass scene manager
-        // set loop function (can be null)
-        this.currentSceneLoop = typeof scene.loop === "function" ? scene.loop : (() => {});
         this.currentIndex = idx;
+        const scene = this.scenes[idx];
+        this.currentSceneLoop = typeof scene.loop === "function" ? scene.loop : (() => {});
+        if (typeof scene.init === "function") scene.init(this); 
+    }
+    start(){
+        this.switchScene(0);
     }
     tick() {
-        this.currentSceneLoop(this);
+        const scene = this.scenes[this.currentIndex];
+        if (scene && typeof scene.loop === "function") {
+            scene.loop(this);
+        }
     }
 }
-const initializationScene = (sceneManager) => {
-    world = new World();
-    const player = new Player(400, 400);
-    world.setPlayer(player);
-    sceneManager.switchScene(1);
-};
-
-const starterChooseScene = (sceneManager) => {
-    if (!world) return;
-    world.debugRenderList = [{ info: "Starter screen: capture one of the creatures. Press Enter to start the normal run." }];
-    const starterCount = 3;
-    for (let i = 0; i < starterCount; i++) {
-        const entity = new Entity(200 + i * 80, 400);
-        world.addEntity(entity, true, 0);
+const Scenes = {
+    init: {
+        started: false,
+        init(sm){
+            if (!Scenes.init.started) {
+                Scenes.init.started = true;
+                world = new World();
+                const player = new Player(300, 300);
+                world.setPlayer(player)
+                sm.world = world
+                sm.switchScene("choose")
+            }
+        }
+    },
+    choose: {
+        init(sm){
+            world.entities = [];
+            world.bots = []
+            world.debugRenderList = []
+            const starterX = 200;
+            const spacing = 80;
+            for(let i = 0; i < 3; i++){
+                const e = new Entity(starterX + i * spacing, 400)
+                world.addEntity(e, false, 0)
+            }
+        },
+        loop(sm){
+            world.update(commands);
+            world.render(ctx);
+            world.debugUI(ctx)
+            captureListen(world, world.player);
+            if (world.player.roster.members.length > 0){
+                sm.switchScene("normal")
+            }
+            resetCommands()
+        }
+    },
+    normal:{
+        init(sm){
+            world.debugRenderList = [];
+            console.log("c")
+            spawnCircle(world, 400, 400, 100, 10)
+        },
+        loop(sm){
+            world.update(commands);
+            world.render(ctx)
+            resetCommands();
+        }
     }
-    if (world.player.roster.canAdd()) {
-        console.log("You can capture a starter creature by moving close to it.");
-    }
-    
-};
-
-const startNormalScene = (sceneManager) => {
-    if (!world) return;
-    world.debugRenderList = [];
-    spawnCircle(world, 400, 400, 100, 10);
-    console.log("Normal run started.");
-    sceneManager.switchScene(3); // single switch to the run scene
-};
-const runScene = (sceneManager) => {
-    world.update(commands);
-    world.render(ctx);
-    world.debugUI(ctx);
-    resetCommands();
-};
-
-const sceneManager = new Scene(initializationScene);
-sceneManager.addScene("init",   { init: initializationScene });
-sceneManager.addScene("choose", { init: starterChooseScene, loop: runScene }); // example
-sceneManager.addScene("normal", { init: startNormalScene, loop: runScene });
-sceneManager.addScene("run",    { loop: runScene });
-
-// start with init, then switch to "run" (or "choose") as needed
-sceneManager.switchScene("init");
+}
+const sceneManager = new Scene()
+sceneManager.addScene("init", Scenes.init)
+sceneManager.addScene("choose", Scenes.choose)
+sceneManager.addScene("normal", Scenes.normal)
+sceneManager.start();
 
 function gameLoop() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     sceneManager.tick();
-    requestAnimationFrame(gameLoop);
+    // requestAnimationFrame(gameLoop);
 }
-requestAnimationFrame(gameLoop);
+
+setInterval(() =>gameLoop(), 50)
