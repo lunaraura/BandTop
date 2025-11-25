@@ -1,3 +1,4 @@
+I actually have this now. I think I'm going to keep on with the scene for JS
 const canvas = document.getElementById("canvas");
 const ctx    = canvas.getContext("2d");const SIZE  = 8;
 const HSIZE = SIZE / 2;
