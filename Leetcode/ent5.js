@@ -1,4 +1,3 @@
-I actually have this now. I think I'm going to keep on with the scene for JS
 const canvas = document.getElementById("canvas");
 const ctx    = canvas.getContext("2d");const SIZE  = 8;
 const HSIZE = SIZE / 2;
@@ -20,16 +19,16 @@ let world = null;// Simple key → command mapping
 document.addEventListener("keydown", (event) => {
     switch (event.key) {
         case "ArrowUp":
-            commands.player.y = -1;
+            commands.player.y = -5;
             break;
         case "ArrowDown":
-            commands.player.y = 1;
+            commands.player.y = 5;
             break;
         case "ArrowLeft":
-            commands.player.x = -1;
+            commands.player.x = -5;
             break;
         case "ArrowRight":
-            commands.player.x = 1;
+            commands.player.x = 5;
             break;        case "w":
         case "W":
             commands.entity.y = -1;
@@ -59,13 +58,6 @@ document.addEventListener("keydown", (event) => {
         case "3":
             commands.bringSlot = 2;
             break;
-        case "Enter":
-            // if we're in the starter-choose scene, go to normal start
-            if (typeof sceneManager !== "undefined" &&
-                sceneManager.scenes[sceneManager.currentIndex]?.name === "choose") {
-                sceneManager.switchScene("normal");
-            }
-            break;
     }
 });
 const abilities = {
@@ -84,6 +76,7 @@ class Entity {
         this.maxHP  = 10;
         this.hp     = 10;
         this.atk    = 1;
+        this.inWorld = true;
     }
     applyIntent(world) {
         this.pos.x += this.intents.vel.x;
@@ -117,6 +110,9 @@ class Entity {
         }
         return this.alive;
     }
+    checkIfInWorld(worldEntityList) {
+        return worldEntityList.includes(this);        
+    }
     update(world) {
         if (this.alive) {
             this.applyIntent(world);
@@ -128,12 +124,14 @@ class Entity {
     draw(ctx) {
         ctx.fillRect(this.pos.x - HSIZE, this.pos.y - HSIZE, SIZE, SIZE);
     }
-}class Bot {
+}
+class Bot {
     constructor(entity) {
         this.e = entity;
         this.commandedIntent = { vel: { x: 0, y: 0 }, ab1: null };
         this.outputIntent = { vel: { x: 0, y: 0 }, ab1: null };
         this.bestTarget = null;
+        console.log(entity)
     }
     tick(world) {
         if (this.commandedIntent.vel.x === 0 && this.commandedIntent.vel.y === 0) {
@@ -149,6 +147,7 @@ class Entity {
             const dx   = this.bestTarget.pos.x - this.e.pos.x;
             const dy   = this.bestTarget.pos.y - this.e.pos.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
+            console.log("beat")
             if (dist <= this.e.range) {
                 this.e.intents.ab1 = "example";
             }
@@ -172,7 +171,8 @@ class Entity {
             }
         }
     }
-}class RosterSystem {
+}
+class RosterSystem {
     constructor() {
         this.maxSlots = 3;
         this.members  = [];
@@ -185,7 +185,8 @@ class Entity {
         this.members.push(entity);
         return true;
     }
-}class StorageSystem {
+}
+class StorageSystem {
     constructor() {
         this.maxSlots = 50;
         this.members  = [];
@@ -198,7 +199,8 @@ class Entity {
         this.members.push(entity);
         return true;
     }
-}class Player {
+}
+class Player {
     constructor(x, y) {
         this.pos = { x, y };
         this.inventory = [];
@@ -210,6 +212,7 @@ class Entity {
             ab1: null,
         };
         this.activeEntity   = null;
+        this.activeEntityInWorld = false;
         this.activeEntityBot = null;
     }
     update(commands, world) {
@@ -217,6 +220,14 @@ class Entity {
         this.commands.player.y = commands.player.y;
         this.commands.entity.x = commands.entity.x;
         this.commands.entity.y = commands.entity.y;
+        this.activeEntity   = this.roster.members[0] || null;
+
+        if (this.activeEntity) {
+            this.activeEntityInWorld = this.activeEntity.checkIfInWorld(world.entities);
+        } else {
+            this.activeEntityInWorld = false;
+        }
+
         this.commands.ab1 = commands.ab1;
         this.sendCommandToPet();
         this.moveSelf();
@@ -228,6 +239,7 @@ class Entity {
         this.activeEntityBot.commandedIntent.ab1   = this.commands.ab1 ? "example" : null;
     }
     moveSelf() {
+        //player doesn't really do much, roblox auto caps speed
         this.pos.x += this.commands.player.x;
         this.pos.y += this.commands.player.y;
     }
@@ -363,8 +375,16 @@ function spawnCircle(world, x, y, radius, numEntities) {
         world.addEntity(entity, true, 0); 
     }
 }
+function RosterDebug(){
+    console.log("Roster Debug Info:");
+    for (let i = 0; i < world.player.roster.members.length; i++){
+        const member = world.player.roster.members[i];
+        world.debugRenderList.push({ info: `Roster Slot ${i}: HP=${member.hp}/${member.maxHP} Atk=${member.atk}` })
+    }
+}
 
-// ...existing code...
+
+
 class Scene {
     constructor() {
         this.world = null;
@@ -423,12 +443,15 @@ const Scenes = {
                 const e = new Entity(starterX + i * spacing, 400)
                 world.addEntity(e, false, 0)
             }
+            RosterDebug();
         },
         loop(sm){
             world.update(commands);
             world.render(ctx);
             world.debugUI(ctx)
-            captureListen(world, world.player);
+            for (const e of world.entities){
+                captureListen(world, e)
+            }
             if (world.player.roster.members.length > 0){
                 sm.switchScene("normal")
             }
@@ -437,8 +460,11 @@ const Scenes = {
     },
     normal:{
         init(sm){
-            world.debugRenderList = [];
-            console.log("c")
+            world.entities = [];
+            world.bots = []
+            world.debugRenderList = []
+            RosterDebug();
+            console.log(world.player)
             spawnCircle(world, 400, 400, 100, 10)
         },
         loop(sm){
