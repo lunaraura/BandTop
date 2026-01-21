@@ -35,20 +35,27 @@ const cloneV = (a) => v(a.x, a.y, a.z);
 const predefinedVectors = {
   seed: {
     properties: { pos: v(0, 0, 0), rot: v(0, 0, 0), mag: v(1, 0, 0) },
-    spawnParts: ["stalk", "leaf"],
-    maxSpawns: 4,
+    spawnParts: ["stalk", "root"],
+    maxSpawns: {stalk: 1, root: 2, total: 3},
     randomTolerances: { rot: v(0, 0, 0), mag: v(0, 0, 0) },
     isLine: false,
   },
   stalk: {
-    properties: { pos: v(0, 0, 0), rot: v(0, 0, 0), mag: v(0, 10, 0) },
-    spawnParts: ["stalk", "leaf"],
-    maxSpawns: 3,
-    randomTolerances: { rot: v(0, 5, 5), mag: v(2, 0, 0) },
+    properties: { pos: v(0, 0, 0), rot: v(0, 90, 0), mag: v(0, 2, 0) },
+    spawnParts: ["stalk", "branch", "leaf"],
+    maxSpawns: {stalk: 1, branch: 2, leaf: 1, total: 3},
+    randomTolerances: { rot: v(0, 0.1, 0.1), mag: v(0, 2, 0) },
+    isLine: true,
+  },
+  branch: {
+    properties: { pos: v(0, 0, 0), rot: v(0, 90, 0), mag: v(0, 0.5, 0) },
+    spawnParts: ["branch", "leaf"],
+    maxSpawns: {branch: 1, leaf: 2, total: 2},
+    randomTolerances: { rot: v(1, 5, 5), mag: v(2, 0, 0) },
     isLine: true,
   },
   root: {
-    properties: { pos: v(0, 0, 0), rot: v(0, -90, 0), mag: v(10, 0, 0) },
+    properties: { pos: v(0, 0, 0), rot: v(0, -90, 0), mag: v(0, -0.5, 0) },
     spawnParts: ["root"],
     maxSpawns: 2,
     randomTolerances: { rot: v(0, 5, 5), mag: v(2, 0, 0) },
@@ -69,23 +76,56 @@ class Flower {
     this.size = size;
     this.parts = [];
     this.growable = [];
+    this.totalMaxParts = {
+        stalk: 5,
+        branch: 40,
+        root: 10,
+        leaf: 50,
+    };
+    this.waterAmt = 10; // higher = more water = faster growth
     objects.push(this);
   }
-
   createSeed() {
     const seed = new Part(this.position, "seed");
     this.parts.push(seed);
     this.checkGrowable();
   }
-
+  waterUse(){
+    this.waterAmt += 1;
+    this.waterAmt = Math.max(0.5, this.waterAmt / this.parts.length);
+  }
   checkGrowable() {
-    this.growable = this.parts.filter((p) => {
+     this.growable = this.parts.filter((p) => {
       const def = predefinedVectors[p.type];
-      return p.children.length < def.maxSpawns;
+      if (!def) return false;
+      if (p.children.length >= this.totalMaxParts) return false;
+      //if maxspawns.total exceeded, not growable
+      const totalChildren = p.children.length;
+      const totalMax = def.maxSpawns.total;
+        if (typeof totalMax === "number" && totalChildren >= totalMax) {
+            return false;
+        }
+      const max = def.maxSpawns;
+      if (typeof max === "number") {
+        return p.children.length < max;
+      }
+
+      if (max && typeof max === "object") {
+        // growable if any spawnPart type still has capacity
+        for (const childType of def.spawnParts) {
+          const limit = max[childType] ?? 0;
+          const count = p.children.filter((c) => c.type === childType).length;
+          if (count < limit) return true;
+        }
+        return false;
+      }
+
+      return false;
     });
   }
 
   tick() {
+    this.waterUse();
     // Simple: each tick, each growable part has a chance to spawn.
     for (const part of this.growable) {
       const def = predefinedVectors[part.type];
@@ -93,8 +133,8 @@ class Flower {
 
       if (part.children.length >= def.maxSpawns) continue;
 
-      const chance = Math.random() * 100;
-      if (chance < 10) this.produceNewPart(part);
+      const chance = (Math.random() * 10 )/ this.waterAmt;
+      if (chance < 1) this.produceNewPart(part);
     }
   }
 
@@ -197,10 +237,13 @@ class Part {
 // --- minimal loop ---
 const flower = new Flower(v(0, 0, 0), 6);
 flower.createSeed();
+flower.tick();
+setInterval(() => {
+  flower.tick();
+}, 50);
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  flower.tick();
   flower.draw(ctx);
   requestAnimationFrame(draw);
 }
