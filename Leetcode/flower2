@@ -1,0 +1,163 @@
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const objects = [];
+
+const v = (x, y, z) => ({ x, y, z });
+const add = (a, b) => v(a.x + b.x, a.y + b.y, a.z + b.z);
+const toRadians = (deg) => (deg * Math.PI) / 180;
+
+function rotateVector(vec, rot) {
+  const radX = toRadians(rot.x);
+  const radY = toRadians(rot.y);
+  const radZ = toRadians(rot.z);
+
+  const cosX = Math.cos(radX), sinX = Math.sin(radX);
+  const cosY = Math.cos(radY), sinY = Math.sin(radY);
+  const cosZ = Math.cos(radZ), sinZ = Math.sin(radZ);
+
+  const x1 = vec.x;
+  const y1 = vec.y * cosX - vec.z * sinX;
+  const z1 = vec.y * sinX + vec.z * cosX;
+
+  const x2 = x1 * cosY + z1 * sinY;
+  const y2 = y1;
+  const z2 = -x1 * sinY + z1 * cosY;
+
+  const x3 = x2 * cosZ - y2 * sinZ;
+  const y3 = x2 * sinZ + y2 * cosZ;
+  const z3 = z2;
+
+  return v(x3, y3, z3);
+}
+const cloneV = (a) => v(a.x, a.y, a.z);
+
+const predefinitions = {
+    shell: {rotVariation: {x: {h:0, l:0}, y: {h:0, l:0}, z: {h:0, l:0}},
+        spawnVar: {stalk: {chance: 0.5, max: 1, rot: [{y: 90}]}, root:{chance: 0.2, max: 2, rot:[{y: -90}]}}, //rot (offset)
+        growth: {waterCollect: 1, magBeforeSpawn: 1, startingMagnitude: 1, needForSustain: 0, needForSpawn: 1} 
+    },
+    root: {rotVariation: {x: {h:0, l:0}, y: {h:30, l:-30}, z: {h:30, l:-30}},
+        spawnVar: {root:{chance: 0.5, max: 2, rot:[]}}, 
+        growth: {waterCollect: 2, magBeforeSpawn: 2, startingMagnitude: 1, needForSustain: 1, needForSpawn: 2}
+    },
+    stalk: {rotVariation: {x: {h:10, l:-10}, y: {h:10, l:-10}, z: {h:10, l:-10}},
+        spawnVar: {leaf:{chance: 0.7, max: 3, rot:[{x: -45}, {x: 0, y: 45}, {x:0, y:-45}]},
+                    flower:{chance: 0.3, max: 1, rot:[{x: -90}]}},
+        growth: {waterCollect: 1, magBeforeSpawn: 1, startingMagnitude: 2, needForSustain: 1, needForSpawn: 1}
+    },
+    leaf: {rotVariation: {x: {h:20, l:-20}, y: {h:20, l:-20}, z: {h:20, l:-20}},
+        spawnVar: {}, 
+        growth: {waterCollect: 3, magBeforeSpawn: 0, startingMagnitude: 1, needForSustain: 1, needForSpawn: 0}
+    },
+    flower: {rotVariation: {x: {h:30, l:-30}, y: {h:30, l:-30}, z: {h:30, l:-30}},
+        spawnVar: {}, 
+        growth: {waterCollect: 0, magBeforeSpawn: 0, startingMagnitude: 1, needForSustain: 0, needForSpawn: 0}
+    },
+    treeTrunk: {rotVariation: {x: {h:5, l:-5}, y: {h:5, l:-5}, z: {h:5, l:-5}},
+        spawnVar: {branch:{chance: 0.6, max: 3, rot:[{y: 45}, {y: -45}]},
+                    root:{chance: 0.3, max: 2, rot:[{y: -90}]}},
+        growth: {waterCollect: 1, magBeforeSpawn: 2, startingMagnitude: 3, needForSustain: 2, needForSpawn: 2}
+    },
+    branch: {rotVariation: {x: {h:15, l:-15}, y: {h:15, l:-15}, z: {h:15, l:-15}},
+        spawnVar: {leaf:{chance: 0.7, max: 4, rot:[{x: -45}, {x: 0, y: 45}, {x:0, y:-45}]},
+                    flower:{chance: 0.4, max: 2, rot:[{x: -90}]}},
+        growth: {waterCollect: 2, magBeforeSpawn: 1, startingMagnitude: 2, needForSustain: 1, needForSpawn: 1}
+    }
+}
+
+class PlantObject {
+    constructor(type, position, rotation, scale) {
+        this.type = type;
+        this.position = position;
+        this.rotation = rotation;
+        this.scale = scale;
+        this.parts = [];
+        this.totalWater = 0;
+        this.partTickIndex = 0;
+        this.splitPartTickPer = 5;
+    }
+    initPart(){
+        let shell = new PlantPart(this.type, cloneV(this.position), cloneV(this.rotation), predefinitions[this.type].growth.startingMagnitude);
+        shell.initTypes();
+        shell.applyRotationVariation();
+        this.parts.push(shell);
+    }
+    tick(){
+        let i = this.partTickIndex;
+        if(this.parts[i]){
+            let part = this.parts[i];
+            part.grow();
+            if(part.canSpawn){
+                const spawnDefs = predefinitions[part.type].spawnVar;
+                for(const spawnType in spawnDefs){
+                    const def = spawnDefs[spawnType];
+                    let spawnedCount = 0;
+                    for(let s = 0; s < def.max; s++){
+                        if(Math.random() < def.chance){
+                            let rotOffset = def.rot[s % def.rot.length] || {x:0, y:0, z:0};
+                            let newRot = add(part.rotation, rotOffset);
+                            let dirVec = rotateVector(v(0, part.magnitude * this.scale, 0), newRot);
+                            let newPos = add(part.position, dirVec);
+                            let newPart = new PlantPart(spawnType, newPos, newRot, predefinitions[spawnType].growth.startingMagnitude);
+                            newPart.initTypes();
+                            newPart.applyRotationVariation();
+                            this.parts.push(newPart);
+                            spawnedCount++;
+                        }
+                    }
+                }
+                part.canSpawn = false;
+            }
+            this.partTickIndex += 1;
+            if(this.partTickIndex >= this.parts.length){
+                this.partTickIndex = 0;
+            }
+        }
+    }
+}
+class PlantPart {
+    constructor(type, position, rotation, magnitude) {
+        this.type = type;
+        this.position = position;
+        this.rotation = rotation;
+        this.magnitude = magnitude;
+        this.age = 0;
+        this.waterNeededSelf = 0;
+        this.waterNeededtoSpawn = 0;
+        this.waterHas = 0;
+        this.canSpawn = false;
+    }
+    initTypes() {
+        const def = predefinitions[this.type];
+        this.rotVariation = def.rotVariation;
+        this.spawnVar = def.spawnVar;
+        this.growth = def.growth;
+        this.waterNeededSelf = this.growth.needForSustain * this.magnitude;
+        this.waterNeededtoSpawn = this.growth.needForSpawn * this.magnitude;
+    }
+    applyRotationVariation() {
+        this.rotation.x += Math.random() * (this.rotVariation.x.h - this.rotVariation.x.l) + this.rotVariation.x.l;
+        this.rotation.y += Math.random() * (this.rotVariation.y.h - this.rotVariation.y.l) + this.rotVariation.y.l;
+        this.rotation.z += Math.random() * (this.rotVariation.z.h - this.rotVariation.z.l) + this.rotVariation.z.l;
+    }
+    grow() {
+        this.age += 1;
+        this.waterHas += this.growth.waterCollect * this.magnitude;
+        if (this.waterHas >= this.waterNeededSelf) {
+            this.waterHas -= this.waterNeededSelf;
+            if (this.waterHas >= this.waterNeededtoSpawn) {
+                this.canSpawn = true;
+            }
+        } else {
+            this.magnitude -= 0.1;
+        }
+    }
+}
+
+// Example usage:
+const plant = new PlantObject("shell", v(0, 0, 0), v(0, 0, 0), 10);
+plant.initPart();
+objects.push(plant);
+setInterval(() => {
+    objects.forEach(obj => obj.tick());
+}, 1000);
