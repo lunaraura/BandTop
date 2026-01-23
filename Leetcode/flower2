@@ -90,7 +90,6 @@ class PlantObject {
     this.partTickIndex = 0;
     this.splitPartTickPer = 5;
   }
-
   initPart() {
     let shell = new PlantPart(
       this.type,
@@ -103,59 +102,63 @@ class PlantObject {
     shell.rotation = wrapRot(shell.rotation); // optional
     this.parts.push(shell);
   }
-
+  collectWaterFromAllParts() {
+    let produced = 0;
+    for (const part of this.parts) {
+      produced += part.produceWater();
+    }
+    this.totalWater += produced;
+  }
+  distributeWaterFIFO() {
+    for (const part of this.parts) {
+      if (this.totalWater <= 0) break;
+        const need = part.waterNeededSelf + part.waterNeededtoSpawn - part.allocatedWater;
+        const toAllocate = Math.min(need, this.totalWater);
+        part.allocatedWater += toAllocate;
+        this.totalWater -= toAllocate;
+    }
+}
   tick() {
-    let i = this.partTickIndex;
-    const part = this.parts[i];
+    if (this.parts.length === 0) return;
+
+    this.collectWaterFromAllParts();
+    this.distributeWaterFIFO();
+    const part = this.parts[this.partTickIndex];
     if (!part) return;
+    const leftover = part.stepWithAllocatedWater();
+    this.totalWater += leftover;
 
-    part.grow();
-
-    if (part.canSpawn) {
-      const spawnDefs = predefinitions[part.type].spawnVar;
-
-      for (const spawnType in spawnDefs) {
-        const def = spawnDefs[spawnType];
-
-        for (let s = 0; s < def.max; s++) {
-          if (Math.random() >= def.chance) continue;
-
-          // Always normalize offsets so x/y/z exist
-          const rotOffset = normRot(def.rot?.[s % def.rot.length] ?? v(0, 0, 0));
-
-          // Start from parent rotation + base offset
-          let childRot = add(normRot(part.rotation), rotOffset);
-
-          // IMPORTANT: apply variation BEFORE computing the direction/position
-          // so position matches the final rotation.
-          // We can do this by creating the part first, varying, then computing position,
-          // OR by applying variation math directly here. We'll do the first for clarity.
-          let newPart = new PlantPart(
-            spawnType,
-            v(0, 0, 0),                 // temporary; set after we know final rotation
-            childRot,
-            predefinitions[spawnType].growth.startingMagnitude
-          );
-          newPart.initTypes();
-          newPart.applyRotationVariation();
-          newPart.rotation = wrapRot(newPart.rotation); // optional
-
-          // Now compute child position using the FINAL rotation
-          // NOTE: consider whether you really want "* this.scale" here.
-          // If magnitude is already a “world length”, multiplying by scale will explode spacing.
-          const stepLen = part.magnitude * this.scale;
-          const dirVec = rotateVector(v(0, stepLen, 0), newPart.rotation);
-          newPart.position = add(part.position, dirVec);
-
-          this.parts.push(newPart);
+    if (part.canSpawn && this.parts.length < this.totalMaxParts) {
+      for (const [spawnType, spawnDef] of Object.entries(
+        predefinitions[part.type].spawnVar
+      )) {
+        const existingOfType = this.parts.filter((p) => p.type === spawnType).length;
+        if (existingOfType >= spawnDef.max) continue;
+        if (Math.random() <= spawnDef.chance) {
+          const rotOffset =
+            spawnDef.rot.length > 0
+                ? spawnDef.rot[Math.floor(Math.random() * spawnDef.rot.length)]
+                : v(0, 0, 0);
+            let newPart = new PlantPart(
+                spawnType,
+                add(
+                    part.position,
+                    rotateVector(v(0, part.magnitude * this.scale, 0), part.rotation)
+                ),
+                add(part.rotation, rotOffset),
+                predefinitions[spawnType].growth.startingMagnitude
+            );
+            newPart.initTypes();
+            newPart.applyRotationVariation();
+            newPart.rotation = wrapRot(newPart.rotation);
+            this.parts.push(newPart);
         }
       }
-
       part.canSpawn = false;
     }
 
-    this.partTickIndex++;
-    if (this.partTickIndex >= this.parts.length) this.partTickIndex = 0;
+    this.partTickIndex =
+      (this.partTickIndex + 1) % Math.min(this.splitPartTickPer, this.parts.length);
   }
 }
 
@@ -166,6 +169,7 @@ class PlantPart {
     this.rotation = normRot(rotation);
     this.magnitude = magnitude;
     this.age = 0;
+    this.allocatedWater = 0;
     this.waterNeededSelf = 0;
     this.waterNeededtoSpawn = 0;
     this.waterHas = 0;
@@ -180,8 +184,32 @@ class PlantPart {
 
     this.waterNeededSelf = this.growth.needForSustain * this.magnitude;
     this.waterNeededtoSpawn = this.growth.needForSpawn * this.magnitude;
+    this.updateNeeds();
   }
+  updateNeeds(){
+    this.waterNeededSelf = this.growth.needForSustain * this.magnitude;
+    this.waterNeededtoSpawn = this.growth.needForSpawn * this.magnitude;
+  }
+  produceWater(){
+    return this.growth.waterCollect * this.magnitude;
+  }
+  stepWithAllocatedWater(){
+    this.age += 1;
+    this.updateNeeds();
+    let w = this.allocatedWater;
+    this.allocatedWater = 0;
+    if (w >= this.waterNeededSelf) {
+      w -= this.waterNeededSelf;
+      if (w >= this.waterNeededtoSpawn) {
+        this.canSpawn = true;
+        w -= this.waterNeededtoSpawn;
+      }
+    } else {
+        this.canSpawn = false;
+    }
+    return w; // return leftover water
 
+  }
   applyRotationVariation() {
     // Ensure components exist before +=
     this.rotation = normRot(this.rotation);
@@ -191,21 +219,6 @@ class PlantPart {
     this.rotation.z += Math.random() * (this.rotVariation.z.h - this.rotVariation.z.l) + this.rotVariation.z.l;
   }
 
-  grow() {
-    this.age += 1;
-    this.waterHas += this.growth.waterCollect * this.magnitude;
-
-    if (this.waterHas >= this.waterNeededSelf) {
-      this.waterHas -= this.waterNeededSelf;
-
-      if (this.waterHas >= this.waterNeededtoSpawn) {
-        this.canSpawn = true;
-        this.waterHas -= this.waterNeededtoSpawn;
-      }
-    } else {
-      this.magnitude -= 0.1;
-    }
-  }
 }
 // Example usage:
 const plant = new PlantObject("shell", v(0, 0, 0), v(0, 0, 0), 10);
