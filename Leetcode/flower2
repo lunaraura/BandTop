@@ -3,7 +3,11 @@ const ctx = canvas.getContext("2d");
 const objects = [];
 
 const v = (x, y, z) => ({ x, y, z });
-const add = (a, b) => v(a.x + b.x, a.y + b.y, a.z + b.z);
+const add = (a, b) => v(
+  (a.x ?? 0) + (b.x ?? 0),
+  (a.y ?? 0) + (b.y ?? 0),
+  (a.z ?? 0) + (b.z ?? 0)
+);
 const toRadians = (deg) => (deg * Math.PI) / 180;
 
 function rotateVector(vec, rot) {
@@ -33,7 +37,7 @@ const cloneV = (a) => v(a.x, a.y, a.z);
 
 const predefinitions = {
     shell: {rotVariation: {x: {h:0, l:0}, y: {h:0, l:0}, z: {h:0, l:0}},
-        spawnVar: {stalk: {chance: 0.5, max: 1, rot: [{y: 90}]}, root:{chance: 0.2, max: 2, rot:[{y: -90}]}}, //rot (offset)
+        spawnVar: {stalk: {chance: 0.5, max: 1, rot: [{y: 90}]}, root:{chance: 0.01, max: 2, rot:[{y: -90}]}}, //rot (offset)
         growth: {waterCollect: 1, magBeforeSpawn: 1, startingMagnitude: 1, needForSustain: 0, needForSpawn: 1} 
     },
     root: {rotVariation: {x: {h:0, l:0}, y: {h:30, l:-30}, z: {h:30, l:-30}},
@@ -42,7 +46,8 @@ const predefinitions = {
     },
     stalk: {rotVariation: {x: {h:10, l:-10}, y: {h:10, l:-10}, z: {h:10, l:-10}},
         spawnVar: {leaf:{chance: 0.7, max: 3, rot:[{x: -45}, {x: 0, y: 45}, {x:0, y:-45}]},
-                    flower:{chance: 0.3, max: 1, rot:[{x: -90}]}},
+                    flower:{chance: 0.3, max: 1, rot:[{x: 0}]},
+                stalk:{chance: 0.4, max: 2, rot:[{y: 0}]}},
         growth: {waterCollect: 1, magBeforeSpawn: 1, startingMagnitude: 2, needForSustain: 1, needForSpawn: 1}
     },
     leaf: {rotVariation: {x: {h:20, l:-20}, y: {h:20, l:-20}, z: {h:20, l:-20}},
@@ -72,6 +77,7 @@ class PlantObject {
         this.rotation = rotation;
         this.scale = scale;
         this.parts = [];
+        this.totalMaxParts = 500;
         this.totalWater = 0;
         this.partTickIndex = 0;
         this.splitPartTickPer = 5;
@@ -132,6 +138,7 @@ class PlantPart {
         this.rotVariation = def.rotVariation;
         this.spawnVar = def.spawnVar;
         this.growth = def.growth;
+        console.log(this.type)
         this.waterNeededSelf = this.growth.needForSustain * this.magnitude;
         this.waterNeededtoSpawn = this.growth.needForSpawn * this.magnitude;
     }
@@ -160,4 +167,24 @@ plant.initPart();
 objects.push(plant);
 setInterval(() => {
     objects.forEach(obj => obj.tick());
-}, 1000);
+}, 100);
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (const obj of objects) {
+        for (const part of obj.parts) {
+            const screenX = canvas.width / 2 + part.position.x;
+            const screenY = canvas.height / 2 - part.position.y;
+            ctx.beginPath();
+            ctx.arc(screenX, screenY, part.magnitude, 0, 2 * Math.PI);
+            ctx.fillStyle = "green";
+            ctx.fill();
+        }
+    }
+    requestAnimationFrame(draw);
+}
+function loop() {
+    draw();
+    requestAnimationFrame(loop);
+}
+loop();
