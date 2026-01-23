@@ -37,7 +37,7 @@ const cloneV = (a) => v(a.x, a.y, a.z);
 
 const predefinitions = {
     shell: {rotVariation: {x: {h:0, l:0}, y: {h:0, l:0}, z: {h:0, l:0}},
-        spawnVar: {stalk: {chance: 0.5, max: 1, rot: [{x: 0}]}, root:{chance: 0.4, max: 2, rot:[{x: -180}]}}, //rot (offset)
+        spawnVar: {stalk: {chance: 0.2, max: 1, rot: [{x: 0}]}, root:{chance: 0.3, max: 2, rot:[{x: -180}]}}, //rot (offset)
         growth: {waterCollect: 2, magBeforeSpawn: 1, startingMagnitude: 1, needForSustain: 0, needForSpawn: 1} 
     },
     root: {rotVariation: {x: {h:0, l:0}, y: {h:30, l:-30}, z: {h:30, l:-30}},
@@ -46,14 +46,15 @@ const predefinitions = {
     },
     stalk: {rotVariation: {x: {h:5, l:-5}, y: {h:5, l:-5}, z: {h:5, l:-5}},
         spawnVar: {
-            stalk:{chance: 0.7, max: 2, rot:[]},
-            petiole:{chance: 0.3, max: 3, rot:[{x: -45}, {x: 0, y: 45}, {x:0, y:-45}]},
+            stalk:{chance: 0.3, max: 1, rot:[]},
+            petiole:{chance: 0.2, max: 3, rot:[{x: -90}, {x: -90, y: 45}, {x: -90, y:-45}]},
             flower:{chance: 0.05, max: 1, rot:[{x: 0}]},
                 },
         growth: {waterCollect: 2, magBeforeSpawn: 1, startingMagnitude: 2, needForSustain: 1, needForSpawn: 2}
     },
     petiole: {rotVariation: {x: {h:10, l:-10}, y: {h:10, l:-10}, z: {h:10, l:-10}},
-        spawnVar: {leaf:{chance: 0.8, max: 2, rot:[{x: -45}, {x: 0, y: 45}, {x:0, y:-45}]}}, 
+        spawnVar: {leaf:{chance: 0.8, max: 2, rot:[{x: -45}, {x: 0, y: 45}, {x:0, y:-45}]},
+            petiole:{chance: 0.3, max: 1, rot:[]}}, 
         growth: {waterCollect: 2, magBeforeSpawn: 0, startingMagnitude: 1, needForSustain: 1, needForSpawn: 1}
     },
     leaf: {rotVariation: {x: {h:20, l:-20}, y: {h:20, l:-20}, z: {h:20, l:-20}},
@@ -128,7 +129,7 @@ class PlantObject {
     this.scale = scale;
 
     this.parts = [];
-    this.totalMaxParts = 500;
+    this.totalMaxParts = 1000;
 
     this.totalWater = 0;
     this.partTickIndex = 0;
@@ -187,15 +188,15 @@ class PlantObject {
     this.distributeWaterFIFO();
 
     // Process all parts each tick
-    for (const part of this.parts) {
-      this.totalWater += part.stepWithAllocatedWater();
-
-      if (part.canSpawn && this.parts.length < this.totalMaxParts) {
-        this.spawnChildrenFrom(part);
-        part.canSpawn = false;
-      }
+    const n = this.parts.length;
+    for (let i = 0; i < n; i++) {
+        const part = this.parts[i];
+        this.totalWater += part.stepWithAllocatedWater();
+        if (part.canSpawn && this.parts.length < this.totalMaxParts) {
+            this.spawnChildrenFrom(part);
+            part.canSpawn = false;
+        }
     }
-    console.log(this.totalWater)
   }
   spawnChildrenFrom(parent) {
     const spawnTable = predefinitions[parent.type].spawnVar;
@@ -205,11 +206,9 @@ class PlantObject {
       
   parent.spawnedCounts[spawnType] = parent.spawnedCounts[spawnType] || 0;
   if (parent.spawnedCounts[spawnType] >= def.max) {
-    console.log(`Parent of type ${parent.type} reached max for ${spawnType}`);
     continue;
   }
   if (Math.random() > def.chance) {
-    console.log(`Spawn chance failed for ${spawnType} from ${parent.type}`);
     continue;
   }
       const rotOffset = normRot(
@@ -299,12 +298,21 @@ class PlantPart {
   }
 }
 // Example usage:
-const plant = new PlantObject("shell", v(0, 0, 0), v(0, 0, 0), 10);
-plant.initPart();
-objects.push(plant);
+
+function planter(amt, spread) {
+    for (let i = 0; i < amt; i++) {
+        const x = (Math.random() - 0.5) * spread;
+        const y = (Math.random() - 0.5) * spread;
+        const plant = new PlantObject("shell", v(x, y, 0), v(0, 0, 0), 4);
+        plant.initPart();
+        objects.push(plant);
+    }
+}
+planter(8, 200);
+
 setInterval(() => {
     objects.forEach(obj => obj.tick());
-}, 500);
+}, 400);
 
 function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -314,8 +322,19 @@ function draw() {
             const screenY = canvas.height / 2 - part.position.y;
             ctx.beginPath();
             ctx.arc(screenX, screenY, part.magnitude, 0, 2 * Math.PI);
-            ctx.fillStyle = "green";
+            switch (part.type) {
+                case "shell": ctx.fillStyle = "brown"; break;
+                case "root": ctx.fillStyle = "sienna"; break;
+                case "stalk": ctx.fillStyle = "green"; break;
+                case "petiole": ctx.fillStyle = "limegreen"; break;
+                case "leaf": ctx.fillStyle = "forestgreen"; break;
+                case "flower": ctx.fillStyle = "pink"; break;
+                case "treeTrunk": ctx.fillStyle = "saddlebrown"; break;
+                case "branch": ctx.fillStyle = "peru"; break;
+                default: ctx.fillStyle = "gray"; break;
+            }
             ctx.fill();
+
         }
     }
     requestAnimationFrame(draw);
