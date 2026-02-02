@@ -1,0 +1,219 @@
+// VoxelInstancedRenderer.js
+// Efficient append-only voxel renderer using THREE.InstancedMesh (one mesh per voxel "type").
+// Strategy: preallocate capacity, only update the new instance matrix, and mark needsUpdate once per flush.
+
+export class VoxelInstancedRenderer {
+  /**
+   * @param {object} opts
+   * @param {THREE.Scene} opts.scene
+   * @param {THREE.BufferGeometry} [opts.geometry] - default: unit box
+   * @param {number} [opts.voxelSize] - world units per voxel
+   * @param {boolean} [opts.centered] - if true, voxel at (x,y,z) is centered on that grid coord; else offset by +0.5
+   * @param {number} [opts.initialCapacity] - per-type initial instance capacity
+   * @param {number} [opts.growFactor] - how aggressively to grow capacity
+   * @param {number} [opts.maxTypes] - not enforced, just sanity for your own use
+   * @param {boolean} [opts.storeIndexMap] - keep a map gridKey -> {type, index} (useful for collision/lookup)
+   */
+  constructor({
+    scene,
+    geometry = null,
+    voxelSize = 1,
+    centered = true,
+    initialCapacity = 1024,
+    growFactor = 1.8,
+    storeIndexMap = true,
+  }) {
+    if (!scene) throw new Error("VoxelInstancedRenderer: scene is required");
+
+    this.scene = scene;
+    this.geometry = geometry ?? new THREE.BoxGeometry(1, 1, 1);
+    this.voxelSize = voxelSize;
+    this.centered = centered;
+    this.initialCapacity = Math.max(1, initialCapacity | 0);
+    this.growFactor = Math.max(1.1, growFactor);
+    this.storeIndexMap = storeIndexMap;
+
+    // type -> bucket
+    this.buckets = new Map();
+
+    // Optional: grid key -> { type, index }
+    this.indexMap = storeIndexMap ? new Map() : null;
+
+    // Write batching: collect additions then flush once per frame
+    this.pending = new Map(); // type -> array of {x,y,z, mat4?}
+
+    // Reused objects to avoid allocations
+    this._o = new THREE.Object3D();
+    this._m4 = new THREE.Matrix4();
+    this._v3 = new THREE.Vector3();
+  }
+
+  // Provide or change material for a type (call before adding voxels of that type).
+  ensureType(type, material) {
+    if (!material) throw new Error("ensureType(type, material): material required");
+    if (this.buckets.has(type)) return this.buckets.get(type);
+
+    const mesh = new THREE.InstancedMesh(this.geometry, material, this.initialCapacity);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.count = 0;
+
+    // If you want per-instance colors later, you can enable instanceColor here.
+    // mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.initialCapacity * 3), 3);
+
+    this.scene.add(mesh);
+
+    const bucket = {
+      type,
+      mesh,
+      capacity: this.initialCapacity,
+      count: 0,
+    };
+
+    this.buckets.set(type, bucket);
+    return bucket;
+  }
+
+  // Add voxel immediately (updates a single matrix). For best performance, prefer queueVoxel + flush().
+  addVoxel(type, x, y, z) {
+    const bucket = this.buckets.get(type);
+    if (!bucket) throw new Error(`addVoxel: unknown type "${type}" (call ensureType first)`);
+
+    this._ensureCapacity(bucket, bucket.count + 1);
+
+    const idx = bucket.count++;
+    bucket.mesh.count = bucket.count;
+
+    this._setInstanceMatrix(bucket.mesh, idx, x, y, z);
+
+    bucket.mesh.instanceMatrix.needsUpdate = true;
+
+    if (this.indexMap) this.indexMap.set(this._key(x, y, z), { type, index: idx });
+    return idx;
+  }
+
+  // Queue voxel for batched addition. Call flush() once per frame/tick.
+  queueVoxel(type, x, y, z) {
+    if (!this.buckets.has(type)) {
+      throw new Error(`queueVoxel: unknown type "${type}" (call ensureType first)`);
+    }
+    let arr = this.pending.get(type);
+    if (!arr) {
+      arr = [];
+      this.pending.set(type, arr);
+    }
+    arr.push({ x, y, z });
+  }
+
+  // Apply all queued voxels with minimal GPU updates.
+  flush() {
+    if (this.pending.size === 0) return;
+
+    for (const [type, items] of this.pending) {
+      const bucket = this.buckets.get(type);
+      if (!bucket || items.length === 0) continue;
+
+      this._ensureCapacity(bucket, bucket.count + items.length);
+
+      const mesh = bucket.mesh;
+      let idx = bucket.count;
+
+      // Write matrices for new instances
+      for (let i = 0; i < items.length; i++) {
+        const { x, y, z } = items[i];
+        this._setInstanceMatrix(mesh, idx, x, y, z);
+
+        if (this.indexMap) this.indexMap.set(this._key(x, y, z), { type, index: idx });
+        idx++;
+      }
+
+      bucket.count = idx;
+      mesh.count = bucket.count;
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+
+    this.pending.clear();
+  }
+
+  // Lookup (only if storeIndexMap=true). Note: append-only; indices never change.
+  getInstanceRef(x, y, z) {
+    return this.indexMap?.get(this._key(x, y, z)) ?? null;
+  }
+
+  // Optional: clear all voxels (keeps meshes/capacity).
+  clear() {
+    for (const bucket of this.buckets.values()) {
+      bucket.count = 0;
+      bucket.mesh.count = 0;
+      bucket.mesh.instanceMatrix.needsUpdate = true;
+    }
+    this.pending.clear();
+    this.indexMap?.clear();
+  }
+
+  // Optional: dispose meshes/geometry if you’re tearing down
+  dispose({ disposeGeometry = false, disposeMaterials = false } = {}) {
+    for (const bucket of this.buckets.values()) {
+      this.scene.remove(bucket.mesh);
+      bucket.mesh.dispose();
+      if (disposeMaterials && bucket.mesh.material?.dispose) bucket.mesh.material.dispose();
+    }
+    this.buckets.clear();
+    this.pending.clear();
+    this.indexMap?.clear();
+    if (disposeGeometry) this.geometry.dispose();
+  }
+
+  // ---------------- internals ----------------
+
+  _ensureCapacity(bucket, needed) {
+    if (needed <= bucket.capacity) return;
+
+    // Grow capacity and rebuild InstancedMesh (THREE doesn't support resizing in place cleanly)
+    const oldMesh = bucket.mesh;
+    const oldCount = bucket.count;
+
+    let newCap = bucket.capacity;
+    while (newCap < needed) newCap = Math.ceil(newCap * this.growFactor);
+
+    const newMesh = new THREE.InstancedMesh(this.geometry, oldMesh.material, newCap);
+    newMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    newMesh.count = oldCount;
+
+    // Copy old instance matrices
+    // Note: instanceMatrix is an InstancedBufferAttribute with array length newCap*16
+    const src = oldMesh.instanceMatrix.array;
+    const dst = newMesh.instanceMatrix.array;
+    dst.set(src.subarray(0, oldCount * 16), 0);
+    newMesh.instanceMatrix.needsUpdate = true;
+
+    // Preserve transform/flags if you changed them
+    newMesh.position.copy(oldMesh.position);
+    newMesh.rotation.copy(oldMesh.rotation);
+    newMesh.scale.copy(oldMesh.scale);
+    newMesh.frustumCulled = oldMesh.frustumCulled;
+
+    // Swap in scene
+    this.scene.remove(oldMesh);
+    oldMesh.dispose();
+    this.scene.add(newMesh);
+
+    bucket.mesh = newMesh;
+    bucket.capacity = newCap;
+  }
+
+  _setInstanceMatrix(mesh, idx, x, y, z) {
+    // Convert grid coords to world coords
+    const s = this.voxelSize;
+    const offset = this.centered ? 0.0 : 0.5;
+    this._o.position.set((x + offset) * s, (y + offset) * s, (z + offset) * s);
+    this._o.rotation.set(0, 0, 0);
+    this._o.scale.set(s, s, s);
+    this._o.updateMatrix();
+    mesh.setMatrixAt(idx, this._o.matrix);
+  }
+
+  _key(x, y, z) {
+    // Fast enough; if you need more speed, pack into bigint or 32-bit hash.
+    return `${x},${y},${z}`;
+  }
+}
