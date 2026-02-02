@@ -1,0 +1,117 @@
+// --- util ---
+function key(x,y,z){ return `${x},${y},${z}`; }
+
+class RNG {
+  constructor(seed){ this.s = seed >>> 0; }
+  nextU32(){ // xorshift32
+    let x = this.s; x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    this.s = x >>> 0; return this.s;
+  }
+  float(){ return this.nextU32() / 4294967296; }
+  range(a,b){ return a + (b-a)*this.float(); }
+  pick(arr){ return arr[(this.float()*arr.length)|0]; }
+}
+
+// --- voxel store ---
+class VoxelWorld {
+  constructor(){ this.occ = new Map(); }
+  isFree(p){ return !this.occ.has(key(p.x,p.y,p.z)); }
+  set(p, type){ this.occ.set(key(p.x,p.y,p.z), type); }
+}
+
+// integer vec
+const vi = (x,y,z)=>({x|0,y|0,z|0});
+
+// 6-neighborhood
+const N6 = [vi(1,0,0),vi(-1,0,0),vi(0,1,0),vi(0,-1,0),vi(0,0,1),vi(0,0,-1)];
+
+function addi(a,b){ return vi(a.x+b.x, a.y+b.y, a.z+b.z); }
+
+// --- cluster base ---
+class Cluster {
+  constructor({type, origin, dir, maxVoxels, params, rng}){
+    this.type = type;
+    this.origin = origin;
+    this.dir = dir.clone().normalize();
+    this.maxVoxels = maxVoxels;
+    this.params = params;
+    this.rng = rng;
+    this.voxels = [];
+    this.tip = origin;
+    this.done = false;
+  }
+
+  step(world){
+    if (this.done) return null;
+    if (this.voxels.length >= this.maxVoxels){ this.done = true; return null; }
+
+    const candidates = [];
+    for (const d of N6){
+      const p = addi(this.tip, d);
+      if (world.isFree(p)) candidates.push(p);
+    }
+    if (!candidates.length){ this.done = true; return null; }
+
+    // score and pick
+    let best = null, bestScore = -Infinity;
+    for (const c of candidates){
+      const s = this.score(c);
+      if (s > bestScore){ bestScore = s; best = c; }
+    }
+    // (optional) stochastic pick: sample top-k weighted; v1 greedy is fine.
+
+    world.set(best, this.type);
+    this.voxels.push(best);
+    this.tip = best;
+    return best;
+  }
+
+  score(p){ return 0; } // overridden
+}
+
+// --- specific clusters ---
+class StemCluster extends Cluster {
+  score(p){
+    const O = new THREE.Vector3(this.origin.x,this.origin.y,this.origin.z);
+    const T = new THREE.Vector3(this.tip.x,this.tip.y,this.tip.z);
+    const P = new THREE.Vector3(p.x,p.y,p.z);
+
+    const step = P.clone().sub(T);
+    const along = step.dot(this.dir);                 // want positive
+    const axisDist = P.clone().sub(O).cross(this.dir).length(); // distance from axis line
+    const noise = (this.rng.float()-0.5) * (this.params.noise ?? 0.2);
+
+    return (along * (this.params.alongWeight ?? 3.0))
+         - (axisDist * (this.params.axisWeight ?? 0.6))
+         + noise;
+  }
+}
+
+class HeadCluster extends Cluster {
+  score(p){
+    const H = new THREE.Vector3(this.origin.x,this.origin.y,this.origin.z);
+    const P = new THREE.Vector3(p.x,p.y,p.z);
+    const r = P.distanceTo(H);
+    const R = this.params.radius ?? 3;
+
+    // fill a ball: prefer inside, prefer near center early
+    const inside = (r <= R) ? 1 : -5;
+    const centerBias = -(r / R);
+    return inside * 10 + centerBias;
+  }
+
+  step(world){
+    // override: head shouldn't walk as a single tip; it should expand from a frontier.
+    // v1 quick hack: keep tip random among existing voxels to "spread".
+    if (this.voxels.length === 0) {
+      if (world.isFree(this.origin)) { world.set(this.origin, this.type); this.voxels.push(this.origin); }
+      this.tip = this.origin;
+      return this.origin;
+    }
+    this.tip = this.rng.pick(this.voxels);
+    return super.step(world);
+  }
+}
+
+// Leaf/Petal similar: axis L + cone constraints.
+// For v1: you can reuse the "random tip among voxels" spreading trick + a cone score.
