@@ -7,8 +7,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf0f8ff);
 
 const camera = new THREE.PerspectiveCamera(60, canvas.width / canvas.height, 0.1, 1000);
-camera.position.set(8, 8, 12);
-camera.lookAt(0, 2, 0);
+camera.position.set(-2, 12, -10);
+camera.lookAt(4, 6, 0);
 
 const v = (x, y, z) => {return {x:x,y:y,z:z}}
 
@@ -28,176 +28,248 @@ class Voxel {
         scene.add(cube);
     }
 }
-
+const predefinedPetalColors = [0xffaaaa, 0xffddaa, 0xffffaa, 0xaaffaa, 0xaaddff, 0xffaaff,
+    0xff88aa, 0xffcc88, 0xffff88, 0x44ffff, 0x88ccff, 0xaaeeff];
 class Flower {
-    constructor(pos, birthData = {}){
-        this.pos = pos;
-        this.dna = birthData;
-        this.limits = {}
-        this.clusterVoxSpawn = {}
+  constructor(pos, birthData = {}) {
+    this.pos = this.snap(pos);
+    this.dna = birthData;
 
-        this.growablePart = []
-        this.allParts = []
+    // tuning knobs (easy to tweak)
+    this.targetStemHeight = this.dna.targetStemHeight ?? 8;     // how tall before bud
+    this.leafStartY = this.dna.leafStartY ?? 2;                 // no leaves at base
+    this.leafChance = this.dna.leafChance ?? 0.35;              // chance a stem tick makes a leaf (when allowed)
+    this.petalColor = this.dna.petalColor ?? predefinedPetalColors[Math.floor(Math.random() * predefinedPetalColors.length)];
 
-        this.init()
-        this.spawnSeed();
-    }
-    init(){
-        let inherited = this.dna;
-        this.limits = {
-            stem: {inCluster:5, overall: 15},
-            leaf: {inCluster:3, overall: 15},
-            flowerBud: {inCluster:1, overall: 3},
-            flowerPetal: {inCluster:6, overall: 36},
-        }
-        //switchcase on how to spawn each voxel in a cluster
-        //radius spawns around origin voxel, chain spawns next to last spawned
-        //triangle spawns beside two other voxels
-        this.clusterVoxSpawn = {
-            seed: {stem: {amt:1, type: "chain", dir: 'up'}},
-            stem: {stem: {amt: 4, type: "chain", dir: 'up'}, leaf: {amt: 1, type: "chain", dir: 'side'}, flowerBud: {amt: 1, type: "chain", dir: 'up'}},
-            leaf: {leaf:{amt: 2, type: "triangle"}, dir: 'side'},
-            flowerBud: {flowerPetal: {amt:6, type: "radius", dir: 'side'}}
-        }
-    }
-    spawnSeed(){
-        this.newPart('seed', null, this.pos)
-    }
-    newPart(type, parentWeld, position){
-        let color =  0xffffff;
-        if (type === 'stem') color = 0x8B4513;
-        else if (type === 'leaf') color = 0x00ff00;
-        else if (type === 'flowerBud') color = 0xff00ff;
-        else if (type === 'flowerPetal') color = 0xffff00;
-        else if (type === 'seed') color = 0xaf6600;
-        const part = {
-            type: type,
-            pos: position,
-            canGrow: true,
-            childPositions: {up: null, down: null, left: null, right: null, front: null, back: null}
-        }
-        this.growablePart.push(part)
-        this.allParts.push(part)
-        const voxel = new Voxel(position.x, position.y, position.z, 1, color);
-        voxel.addToScene(scene);
-    }
-    tick(){
-        console.log("Tick");
-        if (!this.checkLimit()) return null;
-        if (this.growablePart.length === 0) return null;
+    this.limits = {
+      stem: { overall: 40 },
+      leaf: { overall: 20 },
+      flowerBud: { overall: 1 },
+      flowerPetal: { overall: 12 }
+    };
 
-        //pick random growable part
-        const growIdx = Math.floor(Math.random() * this.growablePart.length);
-        const growPart = this.growablePart[growIdx];
-        console.log("Growing part:", growPart.type, "at", growPart.pos);
-        //determine what can grow from it
-        const possibleSpawns = this.clusterVoxSpawn[growPart.type];
-        if (!possibleSpawns) {
-            console.log("No possible spawns for this part.");
-            growPart.canGrow = false;
-            this.growablePart.splice(growIdx, 1);
-            return;
-        }
-        //pick a random spawn type
-        const spawnTypes = Object.keys(possibleSpawns).filter(k => k !== 'dir');
-        const spawnType = spawnTypes[Math.floor(Math.random() * spawnTypes.length)];
-        const spawnData = possibleSpawns[spawnType];
-        //determine new voxel position
-        const dir = possibleSpawns.dir || 'up';
-        const newPos = this.getNewVoxelPosition(growPart.pos, spawnData.type, dir);
-        let occupied = false;
-        for (const p of this.allParts) {
-            if (p.pos.x === newPos.x && p.pos.y === newPos.y && p.pos.z === newPos.z) {
-                occupied = true;
-                break;
-            }
-        }
-        if (occupied) {
-            console.log("Position occupied, cannot grow here.");
-            growPart.canGrow = false;
-            this.growablePart.splice(growIdx, 1);
-            return;
-        }
-        //create new part
-        this.newPart(spawnType, growPart, newPos);
+    // Rules are still here, but tick() will gate them.
+    this.clusterVoxSpawn = {
+      seed: { stem: { amt: 1, type: "chain", dir: "up" } },
+
+      // stem can extend upward; leaves are "side"; bud only when tall enough
+      stem: {
+        stem: { amt: 1, type: "chain", dir: "up" },
+        leaf: { amt: 1, type: "leafBlade", dir: "side" },
+        flowerBud: { amt: 1, type: "chain", dir: "up" }
+      },
+
+      // leaves don't recursively spawn more leaves by default (keeps it from bush-ing out)
+      leaf: {},
+
+      // bud spawns petals as a ring, then becomes non-growable
+      flowerBud: { flowerPetal: { amt: 10, type: "ring", dir: "side" } }
+    };
+
+    this.growablePart = [];
+    this.allParts = [];
+    this.occupied = new Set();
+    this.initMutate();
+    this.spawnSeed();
+  }
+  initMutate() {
+    this.targetStemHeight += Math.floor(Math.random() * 3) - 1;
+    this.leafStartY += Math.floor(Math.random() * 3) - 1;
+    this.leafChance += (Math.random() * 0.2) - 0.1;
+  }
+  key(p) { return `${p.x},${p.y},${p.z}`; }
+  snap(p) { return v(Math.round(p.x), Math.round(p.y), Math.round(p.z)); }
+
+  dirVec(dir) {
+    switch (dir) {
+      case "up": return v(0, 1, 0);
+      case "down": return v(0, -1, 0);
+      case "left": return v(-1, 0, 0);
+      case "right": return v(1, 0, 0);
+      case "front": return v(0, 0, 1);
+      case "back": return v(0, 0, -1);
+      case "side": {
+        const sides = [v(1,0,0), v(-1,0,0), v(0,0,1), v(0,0,-1)];
+        return sides[Math.floor(Math.random() * sides.length)];
+      }
+      default: return v(0, 1, 0);
     }
-    dirVec(dir){
-        switch(dir){
-            case 'up': return v(0,1,0);
-            case 'down': return v(0,-1,0);
-            case 'left': return v(-1,0,0);
-            case 'right': return v(1,0,0);
-            case 'front': return v(0,0,1);
-            case 'back': return v(0,0,-1);
-            case 'side': {
-                const sides = [v(1,0,0), v(-1,0,0), v(0,0,1), v(0,0,-1)];
-                return sides[Math.floor(Math.random() * sides.length)];
-            }
-            case 'diagonalSide': {
-                const sides = [v(1,0,1), v(1,0,-1), v(-1,0,1), v(-1,0,-1)];
-                return sides[Math.floor(Math.random() * sides.length)];
-            }
-            default: return v(0,1,0);
+  }
+
+  isOccupied(p) { return this.occupied.has(this.key(p)); }
+
+  spawnSeed() {
+    this.newPart("seed", null, this.pos);
+  }
+
+  colorFor(type) {
+    let slightVariation = Math.floor(Math.random() * 32);
+    slightVariation = slightVariation << 16 | slightVariation << 8 | slightVariation;
+    if (type === "stem") return 0x339913 + slightVariation;
+    if (type === "leaf") return 0x00dd00 + slightVariation;
+    if (type === "flowerBud") return 0xdd00dd + slightVariation;
+    if (type === "flowerPetal") return this.petalColor + slightVariation;
+    if (type === "seed") return 0xad6600 + slightVariation;
+    return 0xffffff;
+  }
+
+  newPart(type, parent, position) {
+    const pos = this.snap(position);
+    const k = this.key(pos);
+    if (this.occupied.has(k)) return null;
+
+    const part = {
+      type,
+      pos,
+      parent,
+      canGrow: true
+    };
+
+    this.growablePart.push(part);
+    this.allParts.push(part);
+    this.occupied.add(k);
+
+    const voxel = new Voxel(pos.x, pos.y, pos.z, 1, this.colorFor(type));
+    voxel.addToScene(scene);
+    return part;
+  }
+
+  countParts(type) {
+    let n = 0;
+    for (const p of this.allParts) if (p.type === type) n++;
+    return n;
+  }
+
+  atOverallLimit(type) {
+    const lim = this.limits[type];
+    if (!lim) return false;
+    return this.countParts(type) >= lim.overall;
+  }
+
+  getNewVoxelPosition(origin, spawnPattern, dir) {
+    origin = this.snap(origin);
+
+    if (spawnPattern === "chain") {
+      const d = this.dirVec(dir);
+      return v(origin.x + d.x, origin.y + d.y, origin.z + d.z);
+    }
+    if (spawnPattern === "ring") {
+      const ring = [
+        v(1,0,0), v(-1,0,0), v(0,0,1), v(0,0,-1),
+        v(1,0,1), v(-1,0,1), v(1,0,-1), v(-1,0,-1),
+      ];
+      const d = ring[Math.floor(Math.random() * ring.length)];
+      return v(origin.x + d.x, origin.y, origin.z + d.z);
+    }
+
+    if (spawnPattern === "leafBlade") {
+      const side = this.dirVec("side");
+      const options = [
+        v(side.x, 0, side.z),
+        v(side.x * 2, 0, side.z * 2),
+        v(side.x, 0, side.z + (side.x !== 0 ? 1 : 0)),
+        v(side.x + (side.z !== 0 ? 1 : 0), 0, side.z),
+        v(side.x, -1, side.z)
+      ];
+      const d = options[Math.floor(Math.random() * options.length)];
+      return v(origin.x + d.x, origin.y + d.y, origin.z + d.z);
+    }
+
+    // fallback
+    return v(origin.x, origin.y + 1, origin.z);
+  }
+
+  // ---------- growth logic ----------
+  chooseSpawnFor(part) {
+    const rules = this.clusterVoxSpawn[part.type];
+    if (!rules || Object.keys(rules).length === 0) return null;
+    if (part.type === "seed") return { spawnType: "stem", ...rules.stem };
+    if (part.type === "stem") {
+      const stemHeight = part.pos.y - this.pos.y;
+      if (stemHeight < this.targetStemHeight && !this.atOverallLimit("stem")) {
+        if (stemHeight >= this.leafStartY && !this.atOverallLimit("leaf") && Math.random() < this.leafChance) {
+          return { spawnType: "leaf", ...rules.leaf };
         }
+        return { spawnType: "stem", ...rules.stem };
+      }
+
+      if (!this.atOverallLimit("flowerBud") && this.countParts("flowerBud") === 0) {
+        return { spawnType: "flowerBud", ...rules.flowerBud };
+      }
+
+      return null;
     }
-    getNewVoxelPosition(origin, spawnType, dir){
-        const dirVector = this.dirVec(dir);
-        switch(spawnType){
-            case 'chain': {
-                return v(origin.x + dirVector.x, origin.y + dirVector.y, origin.z + dirVector.z);
-            }
-            case 'radius': {
-                const angle = Math.random() * Math.PI * 2;
-                const radius = 1;
-                return v(origin.x + Math.cos(angle) * radius, origin.y, origin.z + Math.sin(angle) * radius);
-            }
-            case 'triangle': {
-                const positions = [
-                    v(origin.x + 1, origin.y, origin.z),
-                    v(origin.x - 1, origin.y, origin.z),
-                    v(origin.x, origin.y, origin.z + 1),
-                    v(origin.x, origin.y, origin.z - 1),
-                    v(origin.x + 1, origin.y, origin.z + 1),
-                    v(origin.x - 1, origin.y, origin.z - 1),
-                    v(origin.x + 1, origin.y, origin.z - 1),
-                    v(origin.x - 1, origin.y, origin.z + 1),
-                ];
-                return positions[Math.floor(Math.random() * positions.length)];
-            }
-            default:
-                return v(origin.x, origin.y + 1, origin.z);
-        }
+
+    if (part.type === "flowerBud") {
+      if (this.atOverallLimit("flowerPetal")) return null;
+      return { spawnType: "flowerPetal", ...rules.flowerPetal };
     }
-    checkLimit(){
-        let overallCounts = {};
-        for (const part of this.allParts) {
-            overallCounts[part.type] = (overallCounts[part.type] || 0) + 1;
-        }
-        return true;
+
+    return null;
+  }
+
+  tick() {
+    if (this.growablePart.length === 0) return;
+
+    const growIdx = Math.floor(Math.random() * this.growablePart.length);
+    const part = this.growablePart[growIdx];
+
+    const choice = this.chooseSpawnFor(part);
+    if (!choice) {
+      part.canGrow = false;
+      this.growablePart.splice(growIdx, 1);
+      return;
     }
-    checkClusterLimit(partType){
-        let clusterCount = 0;
-        for (const part of this.allParts) {
-            if (part.type === partType) {
-                clusterCount++;
-            }
-        }
-        const limit = this.limits[partType];
-        if (!limit) return false;
-        return clusterCount < limit.inCluster;
+
+    const { spawnType, amt = 1, type: pattern, dir = "up" } = choice;
+    if (this.atOverallLimit(spawnType)) {
+      return;
     }
-    countParts(type) {
-        return this.allParts.filter(p => p.type === type).length;
+
+    let spawned = 0;
+    for (let i = 0; i < amt; i++) {
+      let placed = false;
+
+      for (let tries = 0; tries < 10; tries++) {
+        const candidate = this.snap(this.getNewVoxelPosition(part.pos, pattern, dir));
+        if (this.isOccupied(candidate)) continue;
+
+        this.newPart(spawnType, part, candidate);
+        spawned++;
+        placed = true;
+        break;
+      }
+
+      if (!placed) break;
     }
+
+    if (part.type === "flowerBud" && spawned > 0) {
+      part.canGrow = false;
+      this.growablePart.splice(growIdx, 1);
+    }
+  }
 }
 
-const flower = new Flower(v(0,0,0))
+const flowers = [];
+function gridFlowers(rows, cols, spacing) {
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const pos = v(c * spacing, 0, r * spacing);
+            const flower = new Flower(pos);
+            flowers.push(flower);
+        }
+    }
+}
+gridFlowers(30, 30, 10);
+
+
 setInterval(() => {
-    flower.tick();
-}, 1000);
+    for (const flower of flowers) {
+        flower.tick();
+    }
+}, 500);
 function loop() {
     requestAnimationFrame(loop);
     renderer.render(scene, camera);
-    scene.rotation.y += 0.01;
 }
 loop();
