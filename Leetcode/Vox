@@ -1,219 +1,142 @@
-// VoxelInstancedRenderer.js
-// Efficient append-only voxel renderer using THREE.InstancedMesh (one mesh per voxel "type").
-// Strategy: preallocate capacity, only update the new instance matrix, and mark needsUpdate once per flush.
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
 
-export class VoxelInstancedRenderer {
-  /**
-   * @param {object} opts
-   * @param {THREE.Scene} opts.scene
-   * @param {THREE.BufferGeometry} [opts.geometry] - default: unit box
-   * @param {number} [opts.voxelSize] - world units per voxel
-   * @param {boolean} [opts.centered] - if true, voxel at (x,y,z) is centered on that grid coord; else offset by +0.5
-   * @param {number} [opts.initialCapacity] - per-type initial instance capacity
-   * @param {number} [opts.growFactor] - how aggressively to grow capacity
-   * @param {number} [opts.maxTypes] - not enforced, just sanity for your own use
-   * @param {boolean} [opts.storeIndexMap] - keep a map gridKey -> {type, index} (useful for collision/lookup)
-   */
-  constructor({
-    scene,
-    geometry = null,
-    voxelSize = 1,
-    centered = true,
-    initialCapacity = 1024,
-    growFactor = 1.8,
-    storeIndexMap = true,
-  }) {
-    if (!scene) throw new Error("VoxelInstancedRenderer: scene is required");
+const canvas = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(canvas.width, canvas.height);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf0f8ff);
 
-    this.scene = scene;
-    this.geometry = geometry ?? new THREE.BoxGeometry(1, 1, 1);
-    this.voxelSize = voxelSize;
-    this.centered = centered;
-    this.initialCapacity = Math.max(1, initialCapacity | 0);
-    this.growFactor = Math.max(1.1, growFactor);
-    this.storeIndexMap = storeIndexMap;
+const camera = new THREE.PerspectiveCamera(60, canvas.width / canvas.height, 0.1, 1000);
+camera.position.set(8, 8, 12);
+camera.lookAt(0, 2, 0);
 
-    // type -> bucket
-    this.buckets = new Map();
+const v = (x, y, z) => {return {x:x,y:y,z:z}}
 
-    // Optional: grid key -> { type, index }
-    this.indexMap = storeIndexMap ? new Map() : null;
-
-    // Write batching: collect additions then flush once per frame
-    this.pending = new Map(); // type -> array of {x,y,z, mat4?}
-
-    // Reused objects to avoid allocations
-    this._o = new THREE.Object3D();
-    this._m4 = new THREE.Matrix4();
-    this._v3 = new THREE.Vector3();
-  }
-
-  // Provide or change material for a type (call before adding voxels of that type).
-  ensureType(type, material) {
-    if (!material) throw new Error("ensureType(type, material): material required");
-    if (this.buckets.has(type)) return this.buckets.get(type);
-
-    const mesh = new THREE.InstancedMesh(this.geometry, material, this.initialCapacity);
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.count = 0;
-
-    // If you want per-instance colors later, you can enable instanceColor here.
-    // mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.initialCapacity * 3), 3);
-
-    this.scene.add(mesh);
-
-    const bucket = {
-      type,
-      mesh,
-      capacity: this.initialCapacity,
-      count: 0,
-    };
-
-    this.buckets.set(type, bucket);
-    return bucket;
-  }
-
-  // Add voxel immediately (updates a single matrix). For best performance, prefer queueVoxel + flush().
-  addVoxel(type, x, y, z) {
-    const bucket = this.buckets.get(type);
-    if (!bucket) throw new Error(`addVoxel: unknown type "${type}" (call ensureType first)`);
-
-    this._ensureCapacity(bucket, bucket.count + 1);
-
-    const idx = bucket.count++;
-    bucket.mesh.count = bucket.count;
-
-    this._setInstanceMatrix(bucket.mesh, idx, x, y, z);
-
-    bucket.mesh.instanceMatrix.needsUpdate = true;
-
-    if (this.indexMap) this.indexMap.set(this._key(x, y, z), { type, index: idx });
-    return idx;
-  }
-
-  // Queue voxel for batched addition. Call flush() once per frame/tick.
-  queueVoxel(type, x, y, z) {
-    if (!this.buckets.has(type)) {
-      throw new Error(`queueVoxel: unknown type "${type}" (call ensureType first)`);
+class Voxel {
+    constructor(x, y, z, size, color) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.size = size;
+        this.color = color;
     }
-    let arr = this.pending.get(type);
-    if (!arr) {
-      arr = [];
-      this.pending.set(type, arr);
+    addToScene(scene) {
+        const geometry = new THREE.BoxGeometry(this.size, this.size, this.size);
+        const material = new THREE.MeshBasicMaterial({ color: this.color });
+        const cube = new THREE.Mesh(geometry, material);
+        cube.position.set(this.x, this.y, this.z);
+        scene.add(cube);
     }
-    arr.push({ x, y, z });
-  }
-
-  // Apply all queued voxels with minimal GPU updates.
-  flush() {
-    if (this.pending.size === 0) return;
-
-    for (const [type, items] of this.pending) {
-      const bucket = this.buckets.get(type);
-      if (!bucket || items.length === 0) continue;
-
-      this._ensureCapacity(bucket, bucket.count + items.length);
-
-      const mesh = bucket.mesh;
-      let idx = bucket.count;
-
-      // Write matrices for new instances
-      for (let i = 0; i < items.length; i++) {
-        const { x, y, z } = items[i];
-        this._setInstanceMatrix(mesh, idx, x, y, z);
-
-        if (this.indexMap) this.indexMap.set(this._key(x, y, z), { type, index: idx });
-        idx++;
-      }
-
-      bucket.count = idx;
-      mesh.count = bucket.count;
-      mesh.instanceMatrix.needsUpdate = true;
-    }
-
-    this.pending.clear();
-  }
-
-  // Lookup (only if storeIndexMap=true). Note: append-only; indices never change.
-  getInstanceRef(x, y, z) {
-    return this.indexMap?.get(this._key(x, y, z)) ?? null;
-  }
-
-  // Optional: clear all voxels (keeps meshes/capacity).
-  clear() {
-    for (const bucket of this.buckets.values()) {
-      bucket.count = 0;
-      bucket.mesh.count = 0;
-      bucket.mesh.instanceMatrix.needsUpdate = true;
-    }
-    this.pending.clear();
-    this.indexMap?.clear();
-  }
-
-  // Optional: dispose meshes/geometry if you’re tearing down
-  dispose({ disposeGeometry = false, disposeMaterials = false } = {}) {
-    for (const bucket of this.buckets.values()) {
-      this.scene.remove(bucket.mesh);
-      bucket.mesh.dispose();
-      if (disposeMaterials && bucket.mesh.material?.dispose) bucket.mesh.material.dispose();
-    }
-    this.buckets.clear();
-    this.pending.clear();
-    this.indexMap?.clear();
-    if (disposeGeometry) this.geometry.dispose();
-  }
-
-  // ---------------- internals ----------------
-
-  _ensureCapacity(bucket, needed) {
-    if (needed <= bucket.capacity) return;
-
-    // Grow capacity and rebuild InstancedMesh (THREE doesn't support resizing in place cleanly)
-    const oldMesh = bucket.mesh;
-    const oldCount = bucket.count;
-
-    let newCap = bucket.capacity;
-    while (newCap < needed) newCap = Math.ceil(newCap * this.growFactor);
-
-    const newMesh = new THREE.InstancedMesh(this.geometry, oldMesh.material, newCap);
-    newMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    newMesh.count = oldCount;
-
-    // Copy old instance matrices
-    // Note: instanceMatrix is an InstancedBufferAttribute with array length newCap*16
-    const src = oldMesh.instanceMatrix.array;
-    const dst = newMesh.instanceMatrix.array;
-    dst.set(src.subarray(0, oldCount * 16), 0);
-    newMesh.instanceMatrix.needsUpdate = true;
-
-    // Preserve transform/flags if you changed them
-    newMesh.position.copy(oldMesh.position);
-    newMesh.rotation.copy(oldMesh.rotation);
-    newMesh.scale.copy(oldMesh.scale);
-    newMesh.frustumCulled = oldMesh.frustumCulled;
-
-    // Swap in scene
-    this.scene.remove(oldMesh);
-    oldMesh.dispose();
-    this.scene.add(newMesh);
-
-    bucket.mesh = newMesh;
-    bucket.capacity = newCap;
-  }
-
-  _setInstanceMatrix(mesh, idx, x, y, z) {
-    // Convert grid coords to world coords
-    const s = this.voxelSize;
-    const offset = this.centered ? 0.0 : 0.5;
-    this._o.position.set((x + offset) * s, (y + offset) * s, (z + offset) * s);
-    this._o.rotation.set(0, 0, 0);
-    this._o.scale.set(s, s, s);
-    this._o.updateMatrix();
-    mesh.setMatrixAt(idx, this._o.matrix);
-  }
-
-  _key(x, y, z) {
-    // Fast enough; if you need more speed, pack into bigint or 32-bit hash.
-    return `${x},${y},${z}`;
-  }
 }
+
+class Flower {
+    constructor(pos, birthData){
+        this.pos = pos;
+        this.dna = birthData;
+        this.limits = {}
+        this.clusterVoxSpawn = {}
+
+        this.growablePart = []
+        this.allParts = []
+
+        this.init()
+        this.spawnSeed();
+    }
+    init(){
+        let inherited = this.dna;
+        this.limits = {
+            stem: {inCluster:5, overall: 15},
+            leaf: {inCluster:3, overall: 15},
+            flowerBud: {inCluster:1, overall: 3},
+            flowerPetal: {inCluster:6, overall: 36},
+        }
+        //switchcase on how to spawn each voxel in a cluster
+        //radius spawns around origin voxel, chain spawns next to last spawned
+        //triangle spawns beside two other voxels
+        this.clusterVoxSpawn = {
+            seed: {stem: {amt:1, type: "chain", dir: 'up'}},
+            stem: {stem: {amt: 4, type: "chain", dir: 'up'}, leaf: {amt: 1, type: "chain", dir: 'side'}, flowerBud: {amt: 1, type: "chain", dir: 'up'}},
+            leaf: {leaf:{amt: 2, type: "triangle"}, dir: 'side'},
+            flowerBud: {flowerPetal: {amt:6, type: "radius", dir: 'side'}}
+        }
+    }
+    spawnSeed(){
+        this.newPart('seed', null, this.pos)
+    }
+    newPart(type, parentWeld, position){
+        let color =  0xffffff;
+        if (type === 'stem') color = 0x8B4513;
+        else if (type === 'leaf') color = 0x00ff00;
+        else if (type === 'flowerBud') color = 0xff00ff;
+        else if (type === 'flowerPetal') color = 0xffff00;
+        else if (type === 'seed') color = 0xaf6600;
+        const part = {
+            type: type,
+            pos: position,
+            canGrow: true,
+            childPositions: {up: null, down: null, left: null, right: null, front: null, back: null}
+        }
+        this.growablePart.push(part)
+        this.allParts.push(part)
+        const voxel = new Voxel(position.x, position.y, position.z, 1, color);
+        voxel.addToScene(scene);
+    }
+    tick(){
+        console.log("Tick");
+        if (!this.checkLimit()) return null;
+        if (this.growablePart.length === 0) return null;
+
+        //pick random growable part
+        const growIdx = Math.floor(Math.random() * this.growablePart.length);
+        const growPart = this.growablePart[growIdx];
+        console.log("Growing part:", growPart.type, "at", growPart.pos);
+        //determine what can grow from it
+        const possibleSpawns = this.clusterVoxSpawn[growPart.type];
+        if (!possibleSpawns) {
+            console.log("No possible spawns for this part.");
+            growPart.canGrow = false;
+            this.growablePart.splice(growIdx, 1);
+            return;
+        }
+        //pick a random spawn type
+        const spawnTypes = Object.keys(possibleSpawns).filter(k => k !== 'dir');
+        const spawnType = spawnTypes[Math.floor(Math.random() * spawnTypes.length)];
+        const spawnData = possibleSpawns[spawnType];
+        //determine new voxel position
+        const dir = possibleSpawns.dir || 'up';
+        const newPos = this.getNewVoxelPosition(growPart.pos, spawnData.type, dir);
+        let occupied = false;
+        for (const p of this.allParts) {
+            if (p.pos.x === newPos.x && p.pos.y === newPos.y && p.pos.z === newPos.z) {
+                occupied = true;
+                break;
+            }
+        }
+        if (occupied) {
+            console.log("Position occupied, cannot grow here.");
+            growPart.canGrow = false;
+            this.growablePart.splice(growIdx, 1);
+            return;
+        }
+        //create new part
+        this.newPart(spawnType, growPart, newPos);
+    }
+    checkLimit(){
+
+        return true;
+    }
+    countParts(type) {
+        return this.allParts.filter(p => p.type === type).length;
+    }
+}
+
+const flower = new Flower(v(0,0,0))
+setInterval(() => {
+    flower.tick();
+}, 1000);
+function loop() {
+    requestAnimationFrame(loop);
+    renderer.render(scene, camera);
+    scene.rotation.y += 0.01;
+}
+loop();
