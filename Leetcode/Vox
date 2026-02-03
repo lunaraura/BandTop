@@ -30,7 +30,7 @@ class Voxel {
 }
 
 class Flower {
-    constructor(pos, birthData){
+    constructor(pos, birthData = {}){
         this.pos = pos;
         this.dna = birthData;
         this.limits = {}
@@ -121,9 +121,70 @@ class Flower {
         //create new part
         this.newPart(spawnType, growPart, newPos);
     }
+    dirVec(dir){
+        switch(dir){
+            case 'up': return v(0,1,0);
+            case 'down': return v(0,-1,0);
+            case 'left': return v(-1,0,0);
+            case 'right': return v(1,0,0);
+            case 'front': return v(0,0,1);
+            case 'back': return v(0,0,-1);
+            case 'side': {
+                const sides = [v(1,0,0), v(-1,0,0), v(0,0,1), v(0,0,-1)];
+                return sides[Math.floor(Math.random() * sides.length)];
+            }
+            case 'diagonalSide': {
+                const sides = [v(1,0,1), v(1,0,-1), v(-1,0,1), v(-1,0,-1)];
+                return sides[Math.floor(Math.random() * sides.length)];
+            }
+            default: return v(0,1,0);
+        }
+    }
+    getNewVoxelPosition(origin, spawnType, dir){
+        const dirVector = this.dirVec(dir);
+        switch(spawnType){
+            case 'chain': {
+                return v(origin.x + dirVector.x, origin.y + dirVector.y, origin.z + dirVector.z);
+            }
+            case 'radius': {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 1;
+                return v(origin.x + Math.cos(angle) * radius, origin.y, origin.z + Math.sin(angle) * radius);
+            }
+            case 'triangle': {
+                const positions = [
+                    v(origin.x + 1, origin.y, origin.z),
+                    v(origin.x - 1, origin.y, origin.z),
+                    v(origin.x, origin.y, origin.z + 1),
+                    v(origin.x, origin.y, origin.z - 1),
+                    v(origin.x + 1, origin.y, origin.z + 1),
+                    v(origin.x - 1, origin.y, origin.z - 1),
+                    v(origin.x + 1, origin.y, origin.z - 1),
+                    v(origin.x - 1, origin.y, origin.z + 1),
+                ];
+                return positions[Math.floor(Math.random() * positions.length)];
+            }
+            default:
+                return v(origin.x, origin.y + 1, origin.z);
+        }
+    }
     checkLimit(){
-
+        let overallCounts = {};
+        for (const part of this.allParts) {
+            overallCounts[part.type] = (overallCounts[part.type] || 0) + 1;
+        }
         return true;
+    }
+    checkClusterLimit(partType){
+        let clusterCount = 0;
+        for (const part of this.allParts) {
+            if (part.type === partType) {
+                clusterCount++;
+            }
+        }
+        const limit = this.limits[partType];
+        if (!limit) return false;
+        return clusterCount < limit.inCluster;
     }
     countParts(type) {
         return this.allParts.filter(p => p.type === type).length;
