@@ -7,10 +7,10 @@ const visibleChunks = 3;
 const backgroundHills = {
   enabled: true,
   seed: 42,
-  frequency: 0.005,
-  gradientStart: '#6db26e',
-  gradientEnd: '#71a696',
-  hillAmplitudes: [20, 10, 5],
+  frequency: 0.001,
+  gradientStart: '#000000',
+  gradientEnd: '#3fae8d',
+  hillAmplitudes: [60, 20, 5],
   panSpeed: 0.02,
   count: []
 };
@@ -297,7 +297,7 @@ function backgroundArt(){
     }
     // draw layered hills from back to front
     if (backgroundHills.layers && backgroundHills.layers.length) {
-      const baseRgb = hexToRgb(backgroundHills.gradientEnd || '#508bc6');
+      const baseRgb = hexToRgb(backgroundHills.gradientEnd || '#2b5c55');
       for (let i = backgroundHills.layers.length - 1; i >= 0; i--) {
         const layer = backgroundHills.layers[i];
         ctx.beginPath();
