@@ -1,17 +1,26 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-const tileSize = 4;
+const tileSize = 10;
 const chunkSize = 16;
 const visibleChunks = 3;
+const backgroundHills = {
+  enabled: true,
+  seed: 42,
+  frequency: 0.005,
+  gradientStart: '#6db26e',
+  gradientEnd: '#71a696',
+  hillAmplitudes: [20, 10, 5],
+  panSpeed: 0.02,
+  count: []
+};
+const backgroundStarVisibility = 0.5;
 
-// Panning and input
-const pan = { speed: 300 }; // pixels per second
+const pan = { speed: 300 };
 const keys = {};
 let selectedTile = 1;
 let painting = false;
 
-// Optional drag-pan
 let dragPanning = false;
 let lastPointer = null;
 
@@ -24,16 +33,14 @@ resizeCanvas();
 
 const tileDefinitions = {
   0: { name: "empty", color: "#000000", colorVariation: { r: 0, g: 0, b: 0 } },
-  1: { name: "grass", color: "#00ff00", colorVariation: { r: 30, g: 30, b: 30 } },
+  1: { name: "grass", color: "#00cc00", colorVariation: { r: 30, g: 30, b: 30 } },
   2: { name: "dirt",  color: "#964B00", colorVariation: { r: 30, g: 30, b: 30 } },
   3: { name: "stone", color: "#888888", colorVariation: { r: 20, g: 20, b: 20 } },
   4: { name: "water", color: "#0000ff", colorVariation: { r: 0,  g: 0,  b: 50 } }
 };
 
-// Camera: world pixel coords at top-left of screen
 const camera = { x: -window.innerWidth / 2, y: -window.innerHeight / 2 };
 
-// ---------- deterministic helpers ----------
 function hexToRgb(hex) {
   const h = hex.startsWith("#") ? hex.slice(1) : hex;
   return {
@@ -46,7 +53,6 @@ function clampByte(n) {
   return Math.max(0, Math.min(255, n | 0));
 }
 
-// Fast-ish 2D integer hash -> uint32
 function hash2i(x, y, seed = 1337) {
   // all ints
   let h = (x * 374761393) ^ (y * 668265263) ^ (seed * 1442695041);
@@ -54,13 +60,11 @@ function hash2i(x, y, seed = 1337) {
   return (h ^ (h >>> 16)) >>> 0;
 }
 
-// Deterministic noise in [-1, 1] (float)
 function noise2D(x, y) {
   const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
   return (s - Math.floor(s)) * 2 - 1;
 }
 
-// World/tile conversion
 function worldToTile(wx, wy) {
   return { tx: Math.floor(wx / tileSize), ty: Math.floor(wy / tileSize) };
 }
@@ -71,7 +75,6 @@ function localInChunk(tx, ty, cx, cy) {
   return { lx: tx - cx * chunkSize, ly: ty - cy * chunkSize };
 }
 
-// ---------- Chunk / World ----------
 class Chunk {
   constructor(cx, cy, size) {
     this.cx = cx;
@@ -82,33 +85,37 @@ class Chunk {
 
   generateProcedural() {
     this.tiles = [];
+    const baseSurfaceY = 12;
+    const heightAmp = 1
+    const stoneDepth = 18
+
     for (let y = 0; y < this.size; y++) {
       const row = [];
-      for (let x = 0; x < this.size; x++) {
-        const sampleX = (this.cx * this.size + x) / 50;
-        const sampleY = (this.cy * this.size + y) / 50;
-        const n = noise2D(sampleX, sampleY);
-
+      const worldTY = this.cy * this.size + y;
+      for (let lx = 0; lx < this.size; lx++) {
+        const worldTX = this.cx * this.size + lx;
+        const n1 = noise2D(worldTX / 80, 0.123);
+        const n2 = noise2D(worldTX / 25, 7.7);
+        const surfaceY = Math.floor(baseSurfaceY + n1 * heightAmp + n2 * 2);
         let type = 0;
-        if (n < -0.2) type = 4;      // water
-        else if (n < 0.0) type = 2;  // dirt
-        else if (n < 0.2) type = 1;  // grass
-        else type = 3;              // stone
-
+        if (worldTY > surfaceY) {
+            const depth = worldTY - surfaceY;
+            type = (depth > stoneDepth) ? 3 : 2;
+        }
+        else if (worldTY === surfaceY || worldTY === surfaceY - 1) type = 1;
+        else type = 0;
         row.push(type);
       }
-      this.tiles.push(row);
+    this.tiles.push(row);
     }
   }
 }
 
 class World {
   constructor() {
-    // Keep procedural chunks around (so revisiting preserves edits via separate map)
-    this.generatedChunks = new Map(); // key -> Chunk
-    this.visibleChunkKeys = new Set(); // currently visible keys
+    this.generatedChunks = new Map();
+    this.visibleChunkKeys = new Set();
 
-    // Persistent edits: key "tx,ty" -> tileType
     this.edits = new Map();
   }
 
@@ -126,7 +133,6 @@ class World {
     return chunk;
   }
 
-  // Base tile from generation, plus edits override
   getTile(tx, ty) {
     const editKey = this.tileKey(tx, ty);
     if (this.edits.has(editKey)) return this.edits.get(editKey);
@@ -141,7 +147,6 @@ class World {
   setTile(tx, ty, type) {
     const editKey = this.tileKey(tx, ty);
     if (type === 0) {
-      // Optional: erase edit (reveals procedural again)
       this.edits.delete(editKey);
     } else {
       this.edits.set(editKey, type);
@@ -167,7 +172,6 @@ class World {
 const world = new World();
 world.manageVisibleChunks(camera.x + canvas.width / 2, camera.y + canvas.height / 2);
 
-// ---------- Rendering ----------
 function drawGrid() {
   ctx.strokeStyle = "rgba(255,255,255,0.06)";
   ctx.lineWidth = 1;
@@ -192,15 +196,12 @@ function tileColor(type, tx, ty) {
   const base = hexToRgb(def.color);
   const v = def.colorVariation || { r: 0, g: 0, b: 0 };
 
-  // Deterministic “random” in [0,1)
   const h = hash2i(tx, ty, 9001);
-  const u1 = (h & 0xffff) / 65536;          // 0..1
-  const u2 = ((h >>> 16) & 0xffff) / 65536; // 0..1
+  const u1 = (h & 0xffff) / 65536; 
+  const u2 = ((h >>> 16) & 0xffff) / 65536;
 
-  // Center around 0: (-0.5..0.5)
   const dr = (u1 - 0.5) * v.r;
   const dg = (u2 - 0.5) * v.g;
-  // derive b from another mix
   const db = (((u1 + u2) * 0.5) - 0.5) * v.b;
 
   const r = clampByte(base.r + dr);
@@ -210,18 +211,16 @@ function tileColor(type, tx, ty) {
 }
 
 function drawVisibleWorld() {
-  // Determine tile bounds visible on screen
   const minTX = Math.floor(camera.x / tileSize);
   const minTY = Math.floor(camera.y / tileSize);
   const maxTX = Math.floor((camera.x + canvas.width) / tileSize);
   const maxTY = Math.floor((camera.y + canvas.height) / tileSize);
 
-  // Draw tiles directly by visible region (simpler than per-chunk loops for now)
   for (let ty = minTY; ty <= maxTY; ty++) {
     const sy = ty * tileSize - camera.y;
     for (let tx = minTX; tx <= maxTX; tx++) {
       const type = world.getTile(tx, ty);
-      if (type === 0) continue; // optional: skip empty fill
+      if (type === 0) continue; 
       const sx = tx * tileSize - camera.x;
 
       ctx.fillStyle = tileColor(type, tx, ty);
@@ -229,14 +228,95 @@ function drawVisibleWorld() {
     }
   }
 }
+function initBackground(hillAmt, starAmt){
+    if(!backgroundHills.enabled) return;
+    const w = canvas.width;
+    // initialize count and star positions
+    backgroundHills.count = new Array(w).fill(0);
+    backgroundHills.starPositions = [];
 
-// ---------- Update loop ----------
+    // base amplitudes (reset then add random additional hills)
+    const baseAmps = [20, 10, 5];
+    backgroundHills.hillAmplitudes = baseAmps.concat(
+      Array.from({ length: hillAmt }, () => Math.random() * 30 + 10)
+    );
+
+    for (let i = 0; i < starAmt; i++) {
+      backgroundHills.starPositions.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        size: Math.random() * 2 + 0.5,
+        brightness: Math.random() * backgroundStarVisibility
+      });
+    }
+}
+initBackground(0, 100);
+function updateHillsBackground(){
+    if(!backgroundHills.enabled) return;
+  const time = performance.now() * 0.001 * backgroundHills.panSpeed;
+  backgroundHills.count = [];
+  const w = canvas.width;
+  const h = canvas.height;
+  backgroundHills.layers = [];
+  for (let i = 0; i < backgroundHills.hillAmplitudes.length; i++) {
+    backgroundHills.layers.push(new Array(w));
+  }
+  for (let x = 0; x < w; x++) {
+    let combined = 0;
+    for (let i = 0; i < backgroundHills.hillAmplitudes.length; i++) {
+      const amp = backgroundHills.hillAmplitudes[i];
+      const nx = (x * backgroundHills.frequency) + time * (0.25 * (i + 1));
+      const ny = backgroundHills.seed + i * 37;
+      const n = noise2D(nx, ny);
+      const y = (n * amp) + h * 0.5 + i * 6;
+      backgroundHills.layers[i][x] = y;
+      combined = Math.min(combined ? combined : y, y);
+    }
+    backgroundHills.count.push(backgroundHills.layers[backgroundHills.layers.length - 1][x] || h * 0.5);
+  }
+}
+function backgroundArt(){
+    const w = canvas.width;
+    const h = canvas.height;
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, backgroundHills.gradientStart || '#73b8fc');
+    gradient.addColorStop(1, backgroundHills.gradientEnd || '#508bc6');
+    updateHillsBackground();
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, w, h);
+
+    // draw simple stars
+    if (backgroundHills.starPositions && backgroundHills.starPositions.length) {
+      for (const s of backgroundHills.starPositions) {
+        const bx = (s.x + (performance.now() * 0.01 * backgroundHills.panSpeed)) % (w + 200) - 100;
+        ctx.globalAlpha = s.brightness;
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(bx, s.y, s.size, s.size);
+      }
+      ctx.globalAlpha = 1;
+    }
+    // draw layered hills from back to front
+    if (backgroundHills.layers && backgroundHills.layers.length) {
+      const baseRgb = hexToRgb(backgroundHills.gradientEnd || '#508bc6');
+      for (let i = backgroundHills.layers.length - 1; i >= 0; i--) {
+        const layer = backgroundHills.layers[i];
+        ctx.beginPath();
+        ctx.moveTo(0, h);
+        ctx.lineTo(0, layer[0]);
+        for (let x = 1; x < w; x++) ctx.lineTo(x, layer[x]);
+        ctx.lineTo(w, h);
+        ctx.closePath();
+        const alpha = 0.35 * (0.6 + i / (backgroundHills.layers.length * 1.5));
+        ctx.fillStyle = `rgba(${baseRgb.r},${baseRgb.g},${baseRgb.b},${alpha})`;
+        ctx.fill();
+      }
+    }
+}
 function loop(now) {
   if (!loop.last) loop.last = now;
   const dt = (now - loop.last) / 1000;
   loop.last = now;
 
-  // Keyboard pan (WASD/arrows)
   let dx = 0, dy = 0;
   if (keys["ArrowUp"] || keys["w"]) dy -= 1;
   if (keys["ArrowDown"] || keys["s"]) dy += 1;
@@ -253,6 +333,7 @@ function loop(now) {
   world.manageVisibleChunks(centerWorldX, centerWorldY);
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+    backgroundArt();
   drawVisibleWorld();
   drawGrid();
 
@@ -271,7 +352,6 @@ function loop(now) {
 }
 requestAnimationFrame(loop);
 
-// ---------- Painting / pointer controls ----------
 function screenToWorld(sx, sy) {
   return { wx: camera.x + sx, wy: camera.y + sy };
 }
@@ -283,12 +363,9 @@ function paintAtPointer(e) {
   const { wx, wy } = screenToWorld(sx, sy);
   const { tx, ty } = worldToTile(wx, wy);
 
-  // Use e.buttons to know what is held during move:
-  // 1 = left, 2 = right, 4 = middle
   const rightHeld = (e.buttons & 2) !== 0;
   const leftHeld = (e.buttons & 1) !== 0;
 
-  // If this is a pointerdown event, e.buttons is already set, but we also accept e.button there.
   const erase = rightHeld || e.button === 2;
   const draw = leftHeld || e.button === 0;
 
@@ -299,7 +376,6 @@ function paintAtPointer(e) {
 canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(e.pointerId);
 
-  // Middle mouse drag OR Space+Left drag to pan
   const isMiddle = e.button === 1;
   const spaceHeld = !!keys[" "];
   if (isMiddle || (spaceHeld && e.button === 0)) {
@@ -316,7 +392,6 @@ canvas.addEventListener("pointermove", (e) => {
   if (dragPanning && lastPointer) {
     const dx = e.clientX - lastPointer.x;
     const dy = e.clientY - lastPointer.y;
-    // drag moves camera opposite direction of pointer move
     camera.x -= dx;
     camera.y -= dy;
     lastPointer = { x: e.clientX, y: e.clientY };
@@ -335,9 +410,7 @@ canvas.addEventListener("pointerup", (e) => {
 
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-// ---------- Keyboard ----------
 window.addEventListener("keydown", (e) => {
-  // number keys select tile types (1..9)
   if (/^[1-9]$/.test(e.key)) {
     selectedTile = Number(e.key);
     return;
