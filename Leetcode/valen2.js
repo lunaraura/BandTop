@@ -6,7 +6,6 @@ const imgCat = new Image();
 imgCat.src = "cat.jpg";   
 
 const entities = new Set();
-const camera = { x: -window.innerWidth / 2, y: -window.innerHeight / 2 };
 const blockSize = 10;
 const chunkSize = 16;
 const visibleChunks = 3;
@@ -128,8 +127,8 @@ const ShovelTool = {
   drawOverlay(ctx, player){
     const mw = player.mouseWorld();
     const { tx, ty } = worldToTile(mw.wx, mw.wy);
-    const sx = tx * blockSize - camera.x;
-    const sy = ty * blockSize - camera.y;
+    const sx = tx * blockSize - player.camera.x;
+    const sy = ty * blockSize - player.camera.y;
 
     ctx.save();
     ctx.strokeStyle = "rgba(255,255,255,0.6)";
@@ -181,24 +180,21 @@ const BlockPlacerTool = {
     ctx.restore();
   }
 }
-
 const FlowerBouquetTool = {
   id: "flowers",
   label: "Flowers",
 
-  // how many flowers a placed bouquet uses
   bundleSize: 6,
 
   onClick(player) {
     const mw = player.mouseWorld();
     const { tx, ty } = worldToTile(mw.wx, mw.wy);
-
-    // 1) If a flower exists at this tile, pick it
     for (const e of entities) {
       if (e instanceof Flower && e.tx === tx && e.ty === ty) {
         e.alive = false;
         pickedFlowers.add(flowerKey(tx, ty)); 
-        inventory.flowers.push(e.exportDrawData?.() ?? { tx, ty, type: "flower" });
+        inventory.flowers.push(typeof e.exportDrawData === "function" ?
+            e.exportDrawData() : {tx, ty, type: "flower"});
         return;
       }
     }
@@ -243,7 +239,6 @@ const HeartWandTool = {
     }
   }
 }
-
 const genedBlockDefinitions = {
   0: { name: "empty", color: "#000000", colorVariation: { r: 0, g: 0, b: 0 } },
   1: { name: "grass", color: "#00cc00", colorVariation: { r: 30, g: 30, b: 30 } },
@@ -319,7 +314,6 @@ class Player {
   screenToWorld(sx, sy) { return { wx: sx + this.camera.x, wy: sy + this.camera.y }; }
   mouseWorld() { return this.screenToWorld(this.mouse.sx, this.mouse.sy); }
   update(dt) {
-    // example camera pan from arrow keys
     const speed = 300;
     let dx = 0, dy = 0;
     if (this.isDown("ArrowLeft") || this.isDown("a")) dx -= 1;
@@ -355,7 +349,7 @@ class Toolbelt {
     constructor(player){
         this.player = player;
         this.tools = [];
-
+        this.mouse = player.mouse;
     }
     get active(){ return this.tools[this.player.inventory.toolIndex]; }
     next(){ this.player.inventory.toolIndex = (this.player.inventory.toolIndex + 1) % this.tools.length; }
@@ -363,8 +357,8 @@ class Toolbelt {
     update(dt){
         const t = this.active;
         if (!t) return;
-        if (mouse.clicked && t.onClick) t.onClick(this.player, dt);
-            if (mouse.down && t.onHold) t.onHold(this.player, dt);
+        if (this.mouse.clicked && t.onClick) t.onClick(this.player, dt);
+            if (this.mouse.down && t.onHold) t.onHold(this.player, dt);
     }
     drawOverlay(ctx){
         const t = this.active;
@@ -373,15 +367,16 @@ class Toolbelt {
 }
 
 class SceneManager {
-  constructor(defs, startId) {
+  constructor(defs, startId, player) {
     this.defs = defs;
     this.id = null;
     this.scene = null;
     this.t = 0;
     this.state = {};
     this._events = [];
+    this.player = player;
     this.set(startId);
-    this.drawer = new Drawer(camera, canvas, this);
+    this.drawer = new Drawer(player.camera, canvas, this);
   }
 
   set(id, payload = {}) {
@@ -392,7 +387,7 @@ class SceneManager {
     this.state = {};
     this._events = [];
     if (!this.scene) throw new Error(`Unknown scene: ${id}`);
-    if (this.scene.onEnter) this.scene.onEnter(this, payload);
+    if (this.scene.onEnter) this.scene.onEnter(this, this.player, payload);
   }
 
   // schedule callbacks relative to scene start
@@ -486,37 +481,6 @@ class Drawer {
 
         const placeType = PLACEABLE_TYPES[inventory.placeIndex];
         ctx.fillText(`Place: ${globalBlockPointers[placeType]?.name ?? placeType} x${invGet(placeType)} (R)`, 18, 52);
-        ctx.restore();
-    }
-    drawBouquetGhost(ctx, sx, sy, flowers, opts = {}) {
-        const {
-            maxStems = 7,
-            fan = 0.55, 
-            stemLen = 26,
-            stemW = 3,
-            headR = 6,
-            offsetY = 18,
-        } = opts;
-
-        if (!flowers || flowers.length === 0) return;
-
-        const n = Math.min(maxStems, flowers.length);
-        const start = flowers.length - n;
-
-        ctx.save();
-        ctx.translate(sx, sy + offsetY);
-
-        for (let i = 0; i < n; i++) {
-            const f = flowers[start + i];
-            const t = (n === 1) ? 0.5 : i / (n - 1);
-            const ang = (t - 0.5) * fan;
-
-            ctx.save();
-            ctx.translate(0, -stemLen);
-
-            drawFlowerStamp(ctx, f, { headR, centerR: Math.max(2, headR * 0.35) });
-            ctx.restore();
-        }
         ctx.restore();
     }
 }
@@ -765,6 +729,44 @@ function cameraCenterWorld() {
   return { wx: camera.x + canvas.width / 2, wy: camera.y + canvas.height / 2 };
 }
 
+function drawBouquetGhost(ctx, sx, sy, flowers, opts = {}) {
+    const {
+        maxStems = 7,
+        fan = 0.55, 
+        stemLen = 26,
+        stemW = 3,
+        headR = 6,
+        offsetY = 18,
+    } = opts;
+
+    if (!flowers || flowers.length === 0) return;
+
+    const n = Math.min(maxStems, flowers.length);
+    const start = flowers.length - n;
+
+    ctx.save();
+    ctx.translate(sx, sy + offsetY);
+
+    for (let i = 0; i < n; i++) {
+        const f = flowers[start + i];
+        const t = (n === 1) ? 0.5 : i / (n - 1);
+        const ang = (t - 0.5) * fan;
+        ctx.save();
+        ctx.rotate(ang);
+        //stem
+        ctx.strokeStyle = "rgba(46,139,87,0.75)";
+        ctx.lineWidth = stemW;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -stemLen);
+        ctx.stroke();
+
+        ctx.translate(0, -stemLen);
+        drawFlowerStamp(ctx, f, { headR, centerR: Math.max(2, headR * 0.35) });
+        ctx.restore();
+    }
+    ctx.restore();
+}
 //
 const v2 = {
   add: (a,b)=>({x:a.x+b.x,y:a.y+b.y}),
@@ -941,10 +943,10 @@ function drawPetalShape(ctx, shapeId, scale = 1) {
 
 function drawFlowerStamp(ctx, f, opts = {}) {
   const {
-    headR = 6,          // overall size in px
+    headR = 6,
     centerR = 2.2,
-    petalOffset = 0.9,  // how far petals sit from center (in headR units)
-    petalScale = 3.2,   // size of each petal shape (in px-ish)
+    petalOffset = 0.9, 
+    petalScale = 3.2,
   } = opts;
 
   const petalCount = f.petalCount ?? 6;
@@ -985,8 +987,8 @@ function findSurfaceTYAtTX(tx, startTY, maxScan = 200) {
 function snapWorldYToGround(wx, wy) {
   const { tx, ty } = worldToTile(wx, wy);
   const surfaceTY = findSurfaceTYAtTX(tx, ty);
-  if (surfaceTY == null) return wy; // fallback if nothing found
-  return surfaceTY * blockSize; // top of the surface tile (matches your Flower base)
+  if (surfaceTY == null) return wy;
+  return surfaceTY * blockSize;
 }
 class CatFace extends Entity {
   constructor(wx, wy) {
@@ -996,12 +998,12 @@ class CatFace extends Entity {
     this.emoji = "😼";
     this.fontPx = 28;
 
-    this.speed = 70;          // px/s
-    this.turn = 6;            // steering strength
-    this.wanderRadius = 260;  // around camera center
+    this.speed = 70;
+    this.turn = 6;
+    this.wanderRadius = 260
 
-    this.tx = wx; // target world x
-    this.ty = wy; // target world y
+    this.tx = wx; 
+    this.ty = wy;
 
     this.bobT = Math.random() * 10;
     this.pickNewTarget();
@@ -1183,30 +1185,23 @@ class BigFlower extends Entity {
       });
     }
   }
-
-  // pick a reasonable click target: the highest grown node (canopy-ish)
   _currentTipNodeIndex() {
     const segCountTotal = Math.max(0, this.nodes.length - 1);
     const segsToDraw = Math.min(segCountTotal, Math.floor(this.grow * segCountTotal));
     return Math.max(0, segsToDraw);
   }
-
   hitTest(wx, wy) {
     const tipIdx = this._currentTipNodeIndex();
     const tip = this.nodes[tipIdx] ?? this.nodes[0];
     const dx = wx - tip.x;
     const dy = wy - tip.y;
-    const r = 38; // clickable radius in world px
+    const r = 38;
     return (dx*dx + dy*dy) <= r*r;
   }
-
   explode() {
     if (this.mode !== "growing") return;
-
     this.mode = "exploding";
     this.explodeT = 0;
-
-    // spawn particles from attachments that are currently "grown"
     const tipIdx = this._currentTipNodeIndex();
     for (const a of this.attachments) {
       if (a.node > tipIdx) continue;
@@ -1402,7 +1397,7 @@ class FloatingHeart extends Entity {
     this.vx *= 0.97;
     this.vy *= 0.97;
 
-    const t = (this.life === Infinity) ? 0 : (1 - (this.life / 2)); // assumes default 2s
+    const t = (this.life === Infinity) ? 1 : Math.max(0, Math.min(1, this.life / 2.0));
     this.scale = 1 + t * 0.5;
   }
 
@@ -1441,7 +1436,6 @@ class Bouquet extends Entity {
       stemLen: 34,
       headR: 7,
       offsetY: 0,
-      // if you later add jitter: seed: this.seed
     });
   }
 }
@@ -1689,12 +1683,12 @@ let advanceStory = null;
 const MSG = new CenterMessageBox();
 const scenes = {
   valentine: {
-    onEnter(sm) {
-      camera.x = -canvas.width / 2;
-      camera.y = -canvas.height / 2;
+    onEnter(sm, player) {
+      player.camera.x = -canvas.width / 2;
+      player.camera.y = -canvas.height / 2;
 
-      const centerWX = camera.x + canvas.width / 2;
-      const baseWY   = camera.y + canvas.height * 0.78;
+      const centerWX = player.camera.x + canvas.width / 2;
+      const baseWY   = player.camera.y + canvas.height * 0.78;
 
       const spots = [-220, -80, 80, 220];
 
@@ -1713,8 +1707,8 @@ const scenes = {
       sm.state.heartTimer = (sm.state.heartTimer ?? 0) + dt;
       if (sm.state.heartTimer > 0.12) {
         sm.state.heartTimer = 0;
-        const cx = (Math.random()-0.5) * 400 + camera.x + canvas.width / 2;
-        const cy = (Math.random()-0.5) * 300 + camera.y + canvas.height * 0.62;
+        const cx = (Math.random()-0.5) * 400 + player.camera.x + canvas.width / 2;
+        const cy = (Math.random()-0.5) * 300 + player.camera.y + canvas.height * 0.62;
         const vx = (Math.random() - 0.5) * 120;
         const vy = -60 - Math.random() * 120;
 
@@ -1736,7 +1730,6 @@ const scenes = {
 
   }
 };
-const SM = new SceneManager(scenes, "valentine");
 
 function shouldAdvanceStory(player) {
     if (!advanceStory) return false;
@@ -1746,7 +1739,6 @@ function shouldAdvanceStory(player) {
 }
 
 imgCat.onload = () => {
-  console.log("loaded");
 };
 const handdrawnFlowerMesh = {
   stem: {
@@ -1757,17 +1749,15 @@ const handdrawnFlowerMesh = {
       { x: -3, y: 3 }, { x: -2, y: 3 }, { x: -2, y: 0 },
       { x: -1, y: 0 }, { x: -1, y: 11 }, { x: 0, y: 12 },
     ],
-    // pick an anchor point for rotation (base of stem feels right)
     anchor: { x: 0, y: 12 }
   }
-
 }
 function transformVerts(verts, opts) {
   const {
-    x = 0, y = 0,               // screen offset
+    x = 0, y = 0,
     scale = 1,
     angle = 0,
-    anchor = { x: 0, y: 0 },    // local-space pivot
+    anchor = { x: 0, y: 0 }, 
   } = opts;
 
   const cos = Math.cos(angle);
@@ -1823,8 +1813,9 @@ function drawExtra(now) {
   ctx.restore();
 }
 const player = new Player();
+const SM = new SceneManager(scenes, "valentine", player);
 let Input = player.input;
-console.log(player.isDown)
+camera = player.camera;
 
 const toolFactories = [ShovelTool, BlockPlacerTool, FlowerBouquetTool, HeartWandTool];
 const TOOLBELT = new Toolbelt(player);
@@ -1849,10 +1840,10 @@ function loop(now) {
   const lockCam = !!SM.scene?.lockCamera;
 
   if (!lockCam) {
-    if (player.isDown("a") || player.isDown("ArrowLeft"))  camera.x -= camSpeed * dt;
-    if (player.isDown("d") || player.isDown("ArrowRight")) camera.x += camSpeed * dt;
-    if (player.isDown("w") || player.isDown("ArrowUp"))    camera.y -= camSpeed * dt;
-    if (player.isDown("s") || player.isDown("ArrowDown"))  camera.y += camSpeed * dt;
+    if (player.isDown("a") || player.isDown("ArrowLeft"))  player.camera.x -= camSpeed * dt;
+    if (player.isDown("d") || player.isDown("ArrowRight")) player.camera.x += camSpeed * dt;
+    if (player.isDown("w") || player.isDown("ArrowUp"))    player.camera.y -= camSpeed * dt;
+    if (player.isDown("s") || player.isDown("ArrowDown"))  player.camera.y += camSpeed * dt;
   }
   if (player.mouse.clicked || player.wasPressed(" ")) {
     if (advanceStory) advanceStory();
@@ -1865,14 +1856,14 @@ function loop(now) {
 
   SM.update(dt);
 
-  world.manageVisibleChunks(camera.x + canvas.width / 2, camera.y + canvas.height / 2);
+  world.manageVisibleChunks(player.camera.x + canvas.width / 2, player.camera.y + canvas.height / 2);
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   backgroundArt(now);
-  SM.drawer.drawVisibleWorld(ctx, camera);
+  SM.drawer.drawVisibleWorld(player.camera);
 
-  if (SM.scene?.drawWorld) SM.scene.drawWorld(SM, ctx, camera);
+  if (SM.scene?.drawWorld) SM.scene.drawWorld(SM, ctx, player.camera);
 
   updateEntities(dt);
   drawEntities();
