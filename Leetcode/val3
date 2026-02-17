@@ -8,10 +8,10 @@ const blockSize = 10;
 const chunkSize = 16;
 
 const backgroundSettings = {
-  hills: { enabled: true, frequency: 0.03, color: "#1b6952", hillAmplitudes: [200, 100, 50], panSpeed: 0.02 },
-  stars: { enabled: true, frequency: 0.002, color: "#ffffff", panSpeed: 0.01 },
-  trees: { enabled: true, frequency: 0.005, color: "#2e8b57", panSpeed: 0.03 },
-  mountains: { enabled: true, frequency: 0.01, color: "#654321", panSpeed: 0.015 }
+  hills: { enabled: true, frequency: 0.03, colors: {midnight: "#1b6952", noon: "#87ceeb"}, hillAmplitudes: [200, 100, 50], panSpeed: 0.02 },
+  stars: { enabled: true, frequency: 0.002, colors: {midnight: "#ffffff", noon: "#aaf2ff"}, panSpeed: 0.01 },
+  trees: { enabled: true, frequency: 0.005, colors: {midnight: "#2e8b57", noon: "#66cdaa"}, panSpeed: 0.03 },
+  mountains: { enabled: true, frequency: 0.01, colors: {midnight: "#302011", noon: "#a0522d"}, panSpeed: 0.015 }
 };
 
 const genedBlockDefinitions = {
@@ -75,7 +75,10 @@ function tileColor(type, tx, ty) {
   const b = clampByte(base.b + (((u1 + u2) * 0.5) - 0.5) * v.b);
   return `rgb(${r},${g},${b})`;
 }
-
+const v2 = {
+    add: (a, b) => ({ x: a.x + b.x, y: a.y + b.y }),
+    mul: (v, s) => ({ x: v.x * s, y: v.y * s }),
+};
 function snapToBlock(wx) { return Math.floor(wx / blockSize) * blockSize; }
 function snapToGrid(wx, wy) {
   return { wx: Math.floor(wx / blockSize) * blockSize, wy: Math.floor(wy / blockSize) * blockSize };
@@ -228,20 +231,18 @@ class Chunk {
     else this.blocks.set(key, { type });
   }
 
-  // SIMPLE procedural terrain: uses world Y as pixels.
-  // (This is intentionally crude but stable for rendering.)
   generateProcedural() {
     const worldX0 = this.cx * chunkSize * blockSize;
     const worldY0 = this.cy * chunkSize * blockSize;
 
-    const grassThicknessPx = 2 * blockSize;
-    const dirtDepthPx = 6 * blockSize;
-
+    const grassThicknessPx = 4 * blockSize;
+    const dirtDepthPx = 12 * blockSize;
+    const start = Math.round(canvas.height/1.5)
     for (let by = 0; by < chunkSize * blockSize; by += blockSize) {
       for (let bx = 0; bx < chunkSize * blockSize; bx += blockSize) {
         const wx = worldX0 + bx;
         const wy = worldY0 + by;
-        const surface = 220 + noise2D(wx * 0.0025, 0.5) * 40;
+        const surface = start + noise2D(wx * 0.0025, 0.5) * 15;
         const top = surface;
 
         if (wy >= top && wy < top + grassThicknessPx) {
@@ -289,7 +290,6 @@ class Entity {
     ctx.restore();
   }
 }
-
 class FloatingHeart extends Entity {
   constructor(wx, wy, opts = {}) {
     super(wx, wy, opts.clickable ?? true, opts.radius ?? 18);
@@ -310,35 +310,10 @@ class FloatingHeart extends Entity {
     const dx = wx - this.wx, dy = wy - this.wy;
     return (dx*dx + dy*dy) <= (this.radius*this.radius);
   }
-  update(dt, mouse) {
+  update(dt) {
     if (this.life !== Infinity) {
       this.life -= dt;
       if (this.life <= 0) { this.alive = false; return; }
-    }
-    if (this.interaction !== "none") {
-      const mw = mouseWorld();
-
-      if (this.interaction === "drag") {
-        if (!this._held && mouse.down && this.hitTest(mw.wx, mw.wy)) {
-          this._held = true;
-          this._holdDx = this.wx - mw.wx;
-          this._holdDy = this.wy - mw.wy;
-        }
-        if (this._held && !mouse.down) this._held = false;
-
-        if (this._held) {
-          const tx = mw.wx + this._holdDx;
-          const ty = mw.wy + this._holdDy;
-
-          const k = this.dragStrength;
-          this.vx += (tx - this.wx) * k * dt;
-          this.vy += (ty - this.wy) * k * dt;
-        }
-      } else if (this.interaction === "attract") {
-        const k = this.attractStrength;
-        this.vx += (mw.wx - this.wx) * k * dt;
-        this.vy += (mw.wy - this.wy) * k * dt;
-      }
     }
 
     this.wx += this.vx * dt;
@@ -391,6 +366,12 @@ class HeartEntity extends Entity {
     this.vy += 140 * dt;
     this.wx += this.vx * dt;
     this.wy += this.vy * dt;
+    this.hitsGround(300);
+  }
+  hitsGround(groundY) {
+    if (this.wy >= groundY) {
+        this.life = 0;
+    }
   }
   draw(ctx, camera) {
     const x = this.wx - camera.x;
@@ -407,8 +388,11 @@ class HeartEntity extends Entity {
   }
 }
 class FlowerEntity extends Entity {
-  constructor(wx, wy) {
+  constructor(tx, ty) {
+    const wx = tx * blockSize + blockSize / 2;
+    const wy = ty * blockSize + blockSize / 2;
     super(wx, wy, true, 8);
+    this.tx = tx; this.ty = ty;
     this.z = 5;
         this.seed = hash2i(tx, ty, 4242);
     this.petalCount = this.randomRange(
@@ -510,7 +494,7 @@ class FlowerEntity extends Entity {
             const vx = Math.cos(angle) * 50;
             const vy = Math.sin(angle) * 50;
             const heart = new HeartEntity(this.wx, this.wy);
-            const extraHeart =new FloatingHeart(cx, cy, { vx, vy, life: 2.8 + Math.random() * 1.2 })
+            const extraHeart = new FloatingHeart(this.wx, this.wy, { vx, vy, life: 2.8 + Math.random() * 1.2 })
             heart.vx = vx;
             heart.vy = vy;
             extraHeart.vx = -vx;
@@ -546,7 +530,7 @@ class BigFlower extends Entity {
 
     // tuning
     this.maxDepth = 2;
-    this.maxSegmentsPerBranch = 2;
+    this.maxSegmentsPerBranch = 5;
     this.baseLen = 3;
     this.lenJitter = 0.25;
     this.branchProb = 0.35;
@@ -645,7 +629,9 @@ class BigFlower extends Entity {
   }
   update(dt) {
     if (this.delay > 0) { this.delay -= dt; return; }
-
+    if (this.grow >= 1 && this.mode === "growing") {
+      this.mode = "blossom";
+    }
     if (this.mode === "growing") {
       this.grow = Math.min(1, this.grow + this.growRate * dt);
     } else if (this.mode === "exploding") {
@@ -671,6 +657,7 @@ class BigFlower extends Entity {
             const vx = Math.cos(angle) * 80;
             const vy = Math.sin(angle) * 80;
             const heart = new HeartEntity(this.nodes[tipIdx].x, this.nodes[tipIdx].y);
+            
             heart.vx = vx;
             heart.vy = vy;
             scene.entities.add(heart);
@@ -887,7 +874,7 @@ class Toolbelt {
       0: { name: "Hand", action: (scene) => {
         const { wx, wy } = this.player.mouseWorld();
         for (const ent of scene.clickables) {
-          if (ent.hitTest(wx, wy)) { ent.onClick?.(scene, this.player); break; }
+            ent.interaction?.(scene, this.player);
         }
       }},
       1: { name: "Shovel", action: (scene) => {
@@ -908,6 +895,10 @@ class Toolbelt {
       3: { name: "HeartWand", action: (scene) => {
         const { wx, wy } = this.player.mouseWorld();
         scene.addEntity(new HeartEntity(wx, wy));
+        const vx = (Math.random() - 0.5) * 80;
+        const vy = (Math.random() - 0.5) * 80;
+        scene.addEntity(new FloatingHeart(wx, wy, { vx, vy, life: 2.8 + Math.random() * 1.2 }))
+
       }}
     };
   }
@@ -927,6 +918,7 @@ class Drawer {
   worldToScreen(wx, wy) { return { sx: wx - this.camera.x, sy: wy - this.camera.y }; }
 
   drawBackground(now) {
+    //time come later. midnight for rn
     const w = canvas.width, h = canvas.height;
 
     // sky gradient
@@ -943,7 +935,7 @@ class Drawer {
       const oy = this.camera.y * par;
 
       ctx.save();
-      ctx.fillStyle = backgroundSettings.stars.color;
+      ctx.fillStyle = backgroundSettings.stars.colors.midnight;
       for (let i = 0; i < 180; i++) {
         const sx = (hash2i(i, 1, 777) % w) - (ox % w);
         const sy = (hash2i(i, 2, 999) % h) - (oy % h);
@@ -956,7 +948,7 @@ class Drawer {
     // hills line (1D noise)
     if (backgroundSettings.hills.enabled) {
       const hill = backgroundSettings.hills;
-      const { r, g, b } = hexToRgb(hill.color);
+      const { r, g, b } = hexToRgb(hill.colors.midnight);
       const baseline = h * 0.85;
       const freq = hill.frequency ?? 0.004;
 
@@ -1059,7 +1051,7 @@ class Drawer {
         ctx.save();
         ctx.translate(px, py);
         ctx.rotate(a);
-        drawPetalShape(ctx, shapeId, petalScale);
+        this.drawPetalShape(ctx, shapeId, petalScale);
         ctx.restore();
     }
     ctx.fillStyle = "#ffd700";
