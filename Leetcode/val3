@@ -1,12 +1,3 @@
-// ======== BASICS TO MAKE YOUR CURRENT STRUCTURE RENDER ========
-// Notes:
-// - This keeps your class layout, but supplies the missing glue:
-//   Scene + World/Chunk accessors, Drawer rendering, and a main loop.
-// - Minimal: blocks render, entities render (as circles), background renders.
-// - Fixes: missing blockSize/chunkSize, Player.mouse fields, Drawer "thi" typo,
-//          Toolbelt calling scene methods that didn't exist.
-
-// ----------------- globals -----------------
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
@@ -250,14 +241,11 @@ class Chunk {
       for (let bx = 0; bx < chunkSize * blockSize; bx += blockSize) {
         const wx = worldX0 + bx;
         const wy = worldY0 + by;
-
-        // height line in world pixels
-        const surface = 220 + noise2D(wx * 0.0025, 0.5) * 40; // pixels down
+        const surface = 220 + noise2D(wx * 0.0025, 0.5) * 40;
         const top = surface;
 
         if (wy >= top && wy < top + grassThicknessPx) {
           this.setBlockAt(wx, wy, 1);
-          // viable point is the top block position
           if (wy === Math.floor(top / blockSize) * blockSize) this.floraViable.push({ wx, wy });
         } else if (wy >= top + grassThicknessPx && wy < top + grassThicknessPx + dirtDepthPx) {
           this.setBlockAt(wx, wy, 2);
@@ -267,10 +255,7 @@ class Chunk {
       }
     }
   }
-
-  // placeholder: no entity classes required for rendering blocks
   decorate() {
-    // keep empty for now (you can add FlowerEntity/TreeEntity later)
   }
 }
 
@@ -292,8 +277,8 @@ class Entity {
     const dx = wx - this.wx, dy = wy - this.wy;
     return (dx * dx + dy * dy) <= (this.radius * this.radius);
   }
+  interaction(scene, player) {} //for subclasses to override
   draw(ctx, camera) {
-    // minimal default visualization
     const sx = this.wx - camera.x;
     const sy = this.wy - camera.y;
     ctx.save();
@@ -305,11 +290,100 @@ class Entity {
   }
 }
 
+class FloatingHeart extends Entity {
+  constructor(wx, wy, opts = {}) {
+    super(wx, wy, opts.clickable ?? true, opts.radius ?? 18);
+    this.vx = opts.vx ?? 0;
+    this.vy = opts.vy ?? -20;
+    this.life = opts.life ?? 2.0;
+    this.interaction = opts.interaction ?? "none";
+    this.radius = opts.radius ?? 18; 
+    this.dragStrength = opts.dragStrength ?? 14;
+    this.attractStrength = opts.attractStrength ?? 6;
+
+    this._held = false;
+    this._holdDx = 0;
+    this._holdDy = 0;
+  }
+
+  hitTest(wx, wy) {
+    const dx = wx - this.wx, dy = wy - this.wy;
+    return (dx*dx + dy*dy) <= (this.radius*this.radius);
+  }
+  update(dt, mouse) {
+    if (this.life !== Infinity) {
+      this.life -= dt;
+      if (this.life <= 0) { this.alive = false; return; }
+    }
+    if (this.interaction !== "none") {
+      const mw = mouseWorld();
+
+      if (this.interaction === "drag") {
+        if (!this._held && mouse.down && this.hitTest(mw.wx, mw.wy)) {
+          this._held = true;
+          this._holdDx = this.wx - mw.wx;
+          this._holdDy = this.wy - mw.wy;
+        }
+        if (this._held && !mouse.down) this._held = false;
+
+        if (this._held) {
+          const tx = mw.wx + this._holdDx;
+          const ty = mw.wy + this._holdDy;
+
+          const k = this.dragStrength;
+          this.vx += (tx - this.wx) * k * dt;
+          this.vy += (ty - this.wy) * k * dt;
+        }
+      } else if (this.interaction === "attract") {
+        const k = this.attractStrength;
+        this.vx += (mw.wx - this.wx) * k * dt;
+        this.vy += (mw.wy - this.wy) * k * dt;
+      }
+    }
+
+    this.wx += this.vx * dt;
+    this.wy += this.vy * dt;
+    this.vx *= 0.97;
+    this.vy *= 0.97;
+
+    const t = (this.life === Infinity) ? 1 : Math.max(0, Math.min(1, this.life / 2.0));
+    this.scale = 1 + t * 0.5;
+  }
+
+  draw(ctx, camera) {
+    const x = this.wx - camera.x;
+    const y = this.wy - camera.y;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(this.scale, this.scale);
+
+    ctx.fillStyle = "pink";
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.bezierCurveTo(-5, -5, -10, 5, 0, 10);
+    ctx.bezierCurveTo(10, 5, 5, -5, 0, 0);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
 class HeartEntity extends Entity {
-  constructor(wx, wy) {
+  constructor(wx, wy, solid = false) {
     super(wx, wy, false, 10);
     this.vy = -60;
-    this.life = 1.8;
+    this.solid = solid;
+    this.init()
+    this.life = 1000;
+  }
+  init() {
+    if (!this.solid) {
+        this.life = 1.8;
+        this.clickable = false;
+    } else {
+        this.life = 1000;
+        this.clickable = true;
+    }
   }
   update(dt) {
     this.life -= dt;
@@ -332,26 +406,425 @@ class HeartEntity extends Entity {
     ctx.restore();
   }
 }
+class FlowerEntity extends Entity {
+  constructor(wx, wy) {
+    super(wx, wy, true, 8);
+    this.z = 5;
+        this.seed = hash2i(tx, ty, 4242);
+    this.petalCount = this.randomRange(
+      flowerLimits.petalCount.min,
+      flowerLimits.petalCount.max
+    );
+    this.leafCount = this.randomRange(
+      flowerLimits.leafCount.min,
+      flowerLimits.leafCount.max
+    );
+    this.petalShapeId = this.pickKey(petalShapes);
+    this.leafShapeId  = this.pickKey(leafShapes);
 
+    this.stemHeight = this.randomRange(
+      flowerLimits.stemHeight.min,
+      flowerLimits.stemHeight.max
+    );
+
+    this.petalShape = this.pickFrom(petalShapes);
+    this.leafShape = this.pickFrom(leafShapes);
+
+    this.color = this.randomColor();
+  }
+  rand() {
+    this.seed ^= this.seed << 13;
+    this.seed ^= this.seed >> 17;
+    this.seed ^= this.seed << 5;
+    return (this.seed >>> 0) / 4294967295;
+  }
+  randomRange(min, max) {
+    return Math.floor(this.rand() * (max - min + 1)) + min;
+  }
+  pickFrom(obj) {
+    const keys = Object.keys(obj);
+    return obj[keys[Math.floor(this.rand() * keys.length)]];
+  }
+  randomColor() {
+    const r = 150 + Math.floor(this.rand() * 100);
+    const g = 50 + Math.floor(this.rand() * 150);
+    const b = 150 + Math.floor(this.rand() * 100);
+    return `rgb(${r},${g},${b})`;
+  }
+    draw(ctx, camera) {
+    const screenX = this.wx - camera.x;
+    const screenY = this.wy - camera.y;
+    ctx.save();
+
+    ctx.strokeStyle = "#2e8b57";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(screenX, screenY);
+    ctx.lineTo(screenX, screenY - this.stemHeight * blockSize);
+    ctx.stroke();
+
+    ctx.fillStyle = this.color;
+
+    const flowerTopY = screenY - this.stemHeight * blockSize;
+    const radius = blockSize * 0.6;
+
+    for (let i = 0; i < this.petalCount; i++) {
+      const angle = (Math.PI * 2 * i) / this.petalCount;
+      const px = screenX + Math.cos(angle) * radius;
+      const py = flowerTopY + Math.sin(angle) * radius;
+
+      ctx.beginPath();
+      ctx.arc(px, py, blockSize * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = "#ffd700";
+    ctx.beginPath();
+    ctx.arc(screenX, flowerTopY, blockSize * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+  exportDrawData() {
+    return {
+      type: "flower",
+      tx: this.tx,
+      ty: this.ty,
+      petalCount: this.petalCount,
+      leafCount: this.leafCount,
+      stemHeight: this.stemHeight,
+      petalShapeId: this.petalShapeId,
+      leafShapeId: this.leafShapeId,
+      color: this.color
+    };
+  }
+  interaction(scene, player) {
+    if (player.tools.isCurrentTool("Hand")){
+        //pick flower
+        player.invAdd(4, 1);
+        scene.entities.delete(this);
+    } else if (player.tools.isCurrentTool("HeartWand")){
+        //multiple hearts spawn outwards
+        for (let i = 0; i < 6; i++) {
+            const angle = (Math.PI * 2 * i) / 6;
+            const vx = Math.cos(angle) * 50;
+            const vy = Math.sin(angle) * 50;
+            const heart = new HeartEntity(this.wx, this.wy);
+            const extraHeart =new FloatingHeart(cx, cy, { vx, vy, life: 2.8 + Math.random() * 1.2 })
+            heart.vx = vx;
+            heart.vy = vy;
+            extraHeart.vx = -vx;
+            extraHeart.vy = -vy;
+            scene.entities.add(heart);
+        }
+    }
+  }
+  pickKey(obj) {
+    const keys = Object.keys(obj);
+    return keys[Math.floor(this.rand() * keys.length)];
+  }
+}
+
+class BigFlower extends Entity {
+  constructor(wx, wy, seed = 91234) {
+    super(wx, wy, true, 20);
+    this.z = 5;
+    this.seed = seed >>> 0;
+    
+    this.nodes = [];
+    this.attachments = [];
+
+    this.grow = 0;
+    this.growRate = 0.35;
+    this.delay = 0;
+
+    // explode state
+    this.mode = "growing";      // "growing" | "blossom" | "exploding"
+    this.explodeT = 0;          // seconds since explosion
+    this.explodeDur = 0.9;      // stems retract over this time
+    this.noAttachAfterExplode = true;
+
+    // tuning
+    this.maxDepth = 2;
+    this.maxSegmentsPerBranch = 2;
+    this.baseLen = 3;
+    this.lenJitter = 0.25;
+    this.branchProb = 0.35;
+    this.branchSpread = Math.PI * 0.35;
+    this.trunkUpAngle = -Math.PI / 2;
+
+    this.generate();
+  }
+  rand() {
+    let s = this.seed | 0;
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    this.seed = s >>> 0;
+    return (this.seed >>> 0) / 4294967295;
+  }
+  rrange(a, b) { return a + (b - a) * this.rand(); }
+  rint(a, b) { return Math.floor(this.rrange(a, b + 1)); }
+
+  generate() {
+    this.nodes.length = 0;
+    this.attachments.length = 0;
+
+    const root = this.addNode(this.wx, this.wy, 6, -1);
+    this.growBranch(root, this.trunkUpAngle, 0);
+  }
+  addNode(x, y, r, parent) {
+    const idx = this.nodes.length;
+    this.nodes.push({ x, y, r, parent });
+    return idx;
+  }
+  
+  growBranch(parentIdx, parentAngle, depth) {
+    let current = parentIdx;
+    let angle = parentAngle;
+
+    const segCount = this.rint(5, this.maxSegmentsPerBranch);
+    for (let i = 0; i < segCount; i++) {
+      angle += this.rrange(-0.12, 0.12);
+
+      const len = this.baseLen * this.rrange(1 - this.lenJitter, 1 + this.lenJitter);
+      const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+
+      const from = this.nodes[current];
+      const toPos = v2.add(from, v2.mul(dir, len));
+
+      const taper = 1 - (depth * 0.18) - (i / segCount) * 0.35;
+      const radius = Math.max(1.5, from.r * taper);
+
+      const next = this.addNode(toPos.x, toPos.y, radius, current);
+
+      if (depth >= 1 && i > 1 && this.rand() < 0.35) {
+        const leafAngle = angle + (this.rand() < 0.5 ? -1 : 1) * this.rrange(0.6, 1.2);
+        this.attachments.push({
+          kind: "leaf",
+          node: next,
+          angle: leafAngle,
+          size: this.rrange(10, 22) * (1 - depth * 0.12),
+          color: "#2e8b57",
+        });
+      }
+
+      if (depth < this.maxDepth && i > 1 && this.rand() < this.branchProb) {
+        const sideCount = this.rint(1, 2);
+        for (let s = 0; s < sideCount; s++) {
+          const sideAngle = angle + this.rrange(-this.branchSpread, this.branchSpread);
+          this.growBranch(next, sideAngle, depth + 1);
+        }
+      }
+
+      current = next;
+    }
+
+    this.attachments.push({
+      kind: "bud",
+      node: current,
+      angle,
+      size: this.rrange(10, 18) * (1 - depth * 0.08),
+      color: "#ffd700",
+    });
+
+    if (this.rand() < 0.85) {
+      this.attachments.push({
+        kind: "petals",
+        node: current,
+        angle,
+        size: this.rrange(16, 26) * (1 - depth * 0.08),
+        color: `rgb(${150 + this.rint(0,100)},${50 + this.rint(0,150)},${150 + this.rint(0,100)})`,
+      });
+    }
+  }
+  _currentTipNodeIndex() {
+    const segCountTotal = Math.max(0, this.nodes.length - 1);
+    const segsToDraw = Math.min(segCountTotal, Math.floor(this.grow * segCountTotal));
+    return Math.max(0, segsToDraw);
+  }
+  update(dt) {
+    if (this.delay > 0) { this.delay -= dt; return; }
+
+    if (this.mode === "growing") {
+      this.grow = Math.min(1, this.grow + this.growRate * dt);
+    } else if (this.mode === "exploding") {
+      this.explodeT += dt;
+      if (this.explodeT >= this.explodeDur) {
+        this.alive = false;
+      }
+    }
+  }
+  interaction(scene, player) {
+    if (player.tools.isCurrentTool("Hand") && this.mode === "growing") return; //cant explode while growing
+    if (player.tools.isCurrentTool("Hand") && this.mode === "blossom") { //can explode when fully bloomed
+        this.mode = "exploding";
+        this.explodeT = 0;
+        return;
+    }
+    if (player.tools.isCurrentTool("HeartWand") && this.mode !== "exploding") {
+        this.mode = "exploding";
+        this.explodeT = 0;
+        const tipIdx = this._currentTipNodeIndex();
+        for (let i = 0; i < 8; i++) {
+            const angle = (Math.PI * 2 * i) / 8;
+            const vx = Math.cos(angle) * 80;
+            const vy = Math.sin(angle) * 80;
+            const heart = new HeartEntity(this.nodes[tipIdx].x, this.nodes[tipIdx].y);
+            heart.vx = vx;
+            heart.vy = vy;
+            scene.entities.add(heart);
+        }
+    }
+  }
+  draw(ctx, camera) {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#2e8b57";
+
+    const segCountTotal = Math.max(0, this.nodes.length - 1);
+
+    // when exploding, retract from current grown amount down to 0
+    let segsToDraw = Math.min(segCountTotal, Math.floor(this.grow * segCountTotal));
+    if (this.mode === "exploding") {
+      const t = Math.min(1, this.explodeT / this.explodeDur);
+      segsToDraw = Math.floor(segsToDraw * (1 - t));
+      ctx.globalAlpha = 1 - t * 0.9;
+    }
+
+    // stems
+    for (let i = 1; i <= segsToDraw; i++) {
+      const n = this.nodes[i];
+      const p = this.nodes[n.parent];
+      const x1 = p.x - camera.x, y1 = p.y - camera.y;
+      const x2 = n.x - camera.x, y2 = n.y - camera.y;
+
+      ctx.lineWidth = Math.max(1, n.r * 0.6);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+
+    // attachments only when not exploding
+    if (this.mode === "growing") {
+      const aT = Math.max(0, (this.grow - 0.6) / 0.4);
+      if (aT > 0) {
+        ctx.globalAlpha = aT;
+
+        for (const a of this.attachments) {
+          if (a.node > segsToDraw) continue;
+
+          const n = this.nodes[a.node];
+          const x = n.x - camera.x;
+          const y = n.y - camera.y;
+
+          if (a.kind === "leaf") {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(a.angle);
+            ctx.fillStyle = a.color;
+            ctx.beginPath();
+            ctx.ellipse(0, 0, a.size * 0.9, a.size * 0.45, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          } else if (a.kind === "bud") {
+            ctx.fillStyle = a.color;
+            ctx.beginPath();
+            ctx.arc(x, y, a.size * 0.25, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (a.kind === "petals") {
+            const count = 6;
+            const radius = a.size * 0.55;
+            ctx.fillStyle = a.color;
+            for (let i = 0; i < count; i++) {
+              const ang = (Math.PI * 2 * i) / count;
+              const px = x + Math.cos(ang) * radius;
+              const py = y + Math.sin(ang) * radius;
+              ctx.beginPath();
+              ctx.arc(px, py, a.size * 0.18, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        }
+
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    ctx.restore();
+  }
+}
+
+class FlowerParticle extends Entity {
+  constructor(wx, wy, opts = {}) {
+    super(wx, wy, false, opts.size ?? 6);
+    this.vx = opts.vx ?? 0;
+    this.vy = opts.vy ?? -200;
+    this.life = opts.life ?? 1.2;
+    this.rot = opts.rot ?? 0;
+    this.vrot = opts.vrot ?? (Math.random() - 0.5) * 8;
+    this.size = opts.size ?? 6;
+    this.color = opts.color ?? "pink";
+    this.drag = opts.drag ?? 0.9;
+    this.gravity = opts.gravity ?? 520;
+    this.shape = opts.shape ?? "circle";
+  }
+  update(dt) {
+    this.life -= dt;
+    if (this.life <= 0) { this.alive = false; return; }
+    this.vy += this.gravity * dt;
+    this.wx += this.vx * dt;
+    this.wy += this.vy * dt;
+    const damp = Math.pow(this.drag, dt * 60);
+    this.vx *= damp;
+    this.vy *= damp;
+    this.rot += this.vrot * dt;
+  }
+  draw(ctx, camera) {
+    const x = this.wx - camera.x;
+    const y = this.wy - camera.y;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(this.rot);
+    const a = Math.max(0, Math.min(1, this.life / 1.2));
+    ctx.globalAlpha = a;
+    ctx.fillStyle = this.color;
+    if (this.shape === "leaf") {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, this.size * 0.9, this.size * 0.45, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.arc(0, 0, this.size * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+class CatFace extends Entity {
+  constructor(wx, wy) {
+    super(wx, wy);
+    this.emoji = "😼";
+  }
+}
 // ----------------- player/tools -----------------
 class Player {
   constructor() {
     this.sm = null;
     this.camera = { x: 0, y: 0 };
-    // FIX: your code uses sx/sy/clicked; keep that shape.
     this.mouse = { sx: 0, sy: 0, down: false, clicked: false };
     this.input = { down: Object.create(null), pressed: Object.create(null), released: Object.create(null) };
     this._bindEvents();
-
     this.inventory = {
       toolIndex: 0,
-      placeIndex: 1, // default place grass
+      placeIndex: 1,
       flowers: [],
       blocks: new Map()
     };
     this.tools = new Toolbelt(this);
+    this.holding = [];
   }
-
   _bindEvents() {
     const c = canvas;
     c.addEventListener("mousemove", (e) => {
@@ -503,9 +976,7 @@ class Drawer {
       ctx.restore();
     }
   }
-
   drawWorldBlocks(world) {
-    // draw only visible chunks for speed
     for (const ch of world.visibleChunks) {
       const x0 = ch.cx * chunkSize * blockSize;
       const y0 = ch.cy * chunkSize * blockSize;
@@ -527,12 +998,10 @@ class Drawer {
       }
     }
   }
-
   drawEntities(entities) {
     const sorted = [...entities].sort((a, b) => (a.z - b.z) || (a.wy - b.wy));
     for (const e of sorted) e.draw(ctx, this.camera);
   }
-
   drawHUD(player) {
     const tool = player.tools.currentTool();
     ctx.save();
@@ -545,53 +1014,100 @@ class Drawer {
     ctx.fillText(`PlaceIndex: ${player.inventory.placeIndex} (Z/X to change)`, 18, 70);
     ctx.restore();
   }
+  drawPetalShape(ctx, shapeId, scale = 1) {
+    const shape = petalShapes[shapeId] ?? petalShapes.triangle;
+    if (Array.isArray(shape)) {
+        ctx.beginPath();
+        ctx.moveTo(shape[0].x * scale, shape[0].y * scale);
+        for (let i = 1; i < shape.length; i++) {
+        ctx.lineTo(shape[i].x * scale, shape[i].y * scale);
+        }
+        ctx.closePath();
+        ctx.fill();
+        return;
+    }
+    if (shape.arc) {
+        ctx.beginPath();
+        ctx.ellipse(
+        shape.arc.x * scale,
+        shape.arc.y * scale,
+        shape.radiusX * scale,
+        shape.radiusY * scale,
+        0, 0, Math.PI * 2
+        );
+        ctx.fill();
+    }
+  }
+  drawFlowerStamp(ctx, f, opts = {}) {
+    const {
+        headR = 6,
+        centerR = 2.2,
+        petalOffset = 0.9, 
+        petalScale = 3.2,
+    } = opts;
+
+    const petalCount = f.petalCount ?? 6;
+    const shapeId = f.petalShapeId ?? "triangle";
+    ctx.save();
+    ctx.fillStyle = f.color ?? "rgb(220,120,220)";
+
+    for (let i = 0; i < petalCount; i++) {
+        const a = (Math.PI * 2 * i) / petalCount;
+        const px = Math.cos(a) * headR * petalOffset;
+        const py = Math.sin(a) * headR * petalOffset;
+
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(a);
+        drawPetalShape(ctx, shapeId, petalScale);
+        ctx.restore();
+    }
+    ctx.fillStyle = "#ffd700";
+    ctx.beginPath();
+    ctx.arc(0, 0, centerR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
 }
 
 // ----------------- a concrete scene -----------------
 class GardenScene {
   constructor() {
     this.world = new World();
-    this.clickables = new Set(); // required by Toolbelt
-    this.entities = new Set();   // required by Toolbelt
+    this.clickables = new Set(); 
+    this.entities = new Set();
   }
 
   onEnter(sm, player) {
     player.sm = sm;
-    // starting camera
     player.camera.x = -canvas.width / 2;
     player.camera.y = 0;
 
-    // seed inventory so placer works
     player.invAdd(1, 200);
     player.invAdd(2, 200);
     player.invAdd(3, 200);
   }
 
-  // methods Toolbelt expects
   getBlockAt(wx, wy) { return this.world.getBlockAt(wx, wy); }
   placeBlockAt(wx, wy, type) { this.world.setBlockAt(wx, wy, type); }
   removeBlockAt(wx, wy) { this.world.removeBlockAt(wx, wy); }
   addEntity(ent) { this.entities.add(ent); }
 
   update(sm, dt) {
-    // update world visibility
     this.world.updateVisible(sm.player.camera);
 
-    // update entities
     for (const e of this.entities) e.update(dt);
     for (const e of this.entities) if (!e.alive) this.entities.delete(e);
 
-    // refresh clickables if you later add clickable entities
     this.clickables.clear();
     for (const e of this.entities) e.addToClickable?.({ clickables: this.clickables });
   }
 
   drawWorld(sm, ctx, camera) {
-    // world blocks + entities are drawn by Drawer in main loop for now
   }
 
   drawOverlay(sm, ctx) {
-    // minimal overlay
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.font = "24px system-ui, sans-serif";
@@ -610,18 +1126,12 @@ const scenes = {
 
 const SM = new SceneManager(
   {
-    garden: {
-      onEnter(sm, player) { scenes.garden.onEnter(sm, player); },
-      update(sm, dt) { scenes.garden.update(sm, dt); },
-      drawWorld(sm, ctx, camera) { scenes.garden.drawWorld(sm, ctx, camera); },
-      drawOverlay(sm, ctx) { scenes.garden.drawOverlay(sm, ctx); }
-    }
+   garden: scenes.garden
   },
   "garden",
   player
 );
 
-// quick keybinds for tool selection + placer type
 window.addEventListener("keydown", (e) => {
   if (e.key === "1") player.tools.toolIndex = 0;
   if (e.key === "2") player.tools.toolIndex = 1;
