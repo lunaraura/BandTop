@@ -1,6 +1,8 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+
+
 class Player {
   constructor() {
     this.mouse = { sx: 0, sy: 0, down: false, clicked: false };
@@ -78,8 +80,8 @@ class SceneManager {
     this.t = 0;
     this.state = {};
     this._events = [];
+    this.clickables = []
     this.set(startId);
-    this.clickable = []
   }
   set(id, payload = {}) {
     if (this.scene?.onExit) this.scene.onExit(this, payload);
@@ -115,7 +117,38 @@ class SceneManager {
     if (this.scene?.drawOverlay) this.scene.drawOverlay(this, ctx);
   }
   goto(id, payload) { this.set(id, payload); }
+  clearClickables() {
+    this.clickables.length = 0;
+  }
+  registerClickable(c){
+    this.clickables.push(c);
+  }
+  handleClick(g) {
+    const { player } = g;
+    if (!player.mouse.clicked) return;
 
+    const ptScreen = { x: player.mouse.sx, y: player.mouse.sy };
+    const w = player.screenToWorld(ptScreen.x, ptScreen.y);
+    const ptWorld = { x: w.wx, y: w.wy };
+
+    const list = this.clickables.slice().sort((a,b)=> (b.z - a.z || ((b._order ?? 0) - (a._order ?? 0))));
+    for (const c of list) {
+        const pt = (c.space === "screen") ? ptScreen : ptWorld;
+        if (c.hitTest(pt.x, pt.y)) {
+            c.onClick({
+                g,
+                player,
+                world: g.world,
+                sm: this,
+                target: c,
+                ptWorld,
+                ptScreen
+            });
+            return true;
+        }
+    }
+    return false;
+  }
 }
 
 // --- Constants & Utilities ---
@@ -244,7 +277,9 @@ class World {
   }
   ensureTree(tx, ty) {
     if (this.shouldHaveTree(tx, ty)) {
-      const tree = new TreeEntity(tx * tileSize + tileSize/2, ty * tileSize);
+      const wx = tx * tileSize + tileSize / 2;
+      const wy = ty * tileSize;
+      const tree = new TreeEntity(wx, wy);
       entities.add(tree);
     }
   }
@@ -257,10 +292,11 @@ class World {
     return noiseVal > 0.7; // adjust threshold for density
   }
   ensureFlower(tx, ty) {
-    if (this.shouldHaveFlower(tx, ty)) {
-      const flower = new FlowerEntity(tx * tileSize + tileSize/2, ty * tileSize);
-      entities.add(flower);
-    }
+    if (!this.shouldHaveFlower(tx, ty)) return;
+    const wx = tx * tileSize + tileSize / 2;
+    const wy = ty * tileSize;
+    const flower = new FlowerEntity(wx, wy);
+    entities.add(flower);
   }
   decorateChunk(cx, cy) {
     const chunk = this.getOrCreateChunk(cx, cy);
@@ -281,12 +317,11 @@ class World {
 }
 class Entity {
     constructor(wx, wy, clickable, z){
-        this.wx = wx;
-        this.wy = wy;
+        this.wx = wx; this.wy = wy;
         this.clickable = clickable; //boolean
         this.z = z;
         
-        this.vx = this.vx;this.vy = this.vy;
+        this.vx = 0;this.vy = 0;
         this.rotation = 0;
         this.scale = 0;
         this.alive = true;
@@ -300,17 +335,17 @@ class Entity {
     }
     draw(ctx, camera) {} 
 }
-
 class FlowerEntity extends Entity {
-    constructor(tx, ty, clickable, z){
-        this.wx = tx;
-        this.wy = ty;
+    constructor(wx, wy, clickable, z){
+        this.wx = wx;
+        this.wy = wy;
         this.clickable = clickable ?? true;
         this.z = z ?? 1;
+        super(wx, wy, this.clickable, this.z);
         this.hitboxSize = 10;
         this.hitbox = {x: this.wx - this.hitboxSize/2, y: this.wy - this.hitboxSize, width: this.hitboxSize, height: this.hitboxSize};
 
-        this.seed = hash2i(tx, ty, 4242);
+        this.seed = hash2i(wx, wy, 4242);
 
 
         this.color = this.randomColor();
@@ -530,17 +565,20 @@ class BigFlower extends Entity {
     return Math.max(0, segsToDraw);
   }
 
-  hitTest(wx, wy) {
-    const tipIdx = this._currentTipNodeIndex();
-    const tip = this.nodes[tipIdx] ?? this.nodes[0];
-    const dx = wx - tip.x;
-    const dy = wy - tip.y;
-    const r = 38; // clickable radius in world px
-    return (dx*dx + dy*dy) <= r*r;
+  hitTest(pt) {
+    const dx = pt.x - this.wx;
+    const dy = pt.y - this.wy;
+    return (dx*dx + dy*dy) <= 10000;
   }
-
+  onClick() {
+    if (this.mode !== "growing") {
+        this.explode();
+    }
+  }
+  register(sm){
+    sm.registerClickable(this);
+  }
   explode() {
-    if (this.mode !== "growing") return;
 
     this.mode = "exploding";
     this.explodeT = 0;
@@ -1033,6 +1071,10 @@ function startMessages() {
     if (i < messageQueue.length) MSG.show(messageQueue[i], { speed: 85 });
   };
 }
+//
+
+
+
 
 //
 const SM = new SceneManager(scenes, "valentine");
@@ -1115,6 +1157,10 @@ function drawExtra(now) {
 }
 
 let externalImgs = []
+const imgCat = new Image();
+imgCat.src = "cat.jpg";
+externalImgs.push(imgCat);
+
 const entities = new Set();
 const player = new Player();
 
