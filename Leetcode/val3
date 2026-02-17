@@ -1,67 +1,43 @@
+// ======== BASICS TO MAKE YOUR CURRENT STRUCTURE RENDER ========
+// Notes:
+// - This keeps your class layout, but supplies the missing glue:
+//   Scene + World/Chunk accessors, Drawer rendering, and a main loop.
+// - Minimal: blocks render, entities render (as circles), background renders.
+// - Fixes: missing blockSize/chunkSize, Player.mouse fields, Drawer "thi" typo,
+//          Toolbelt calling scene methods that didn't exist.
+
+// ----------------- globals -----------------
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
 const imgCat = new Image();
-imgCat.src = "cat.jpg";   
+imgCat.src = "cat.jpg";
+
+const blockSize = 10;
+const chunkSize = 16;
 
 const backgroundSettings = {
-  hills: {
-    enabled: true,
-    frequency: 0.03,
-    color: '#1b6952',
-    hillAmplitudes: [200, 100, 50],
-    panSpeed: 0.02,
-    visible: [],
-    visibility: {high: 0.9, low: 0.4, direction: 'down'},
-    z: 1
-  },
-  stars: {
-    enabled: true,
-    frequency: 0.002,
-    color: '#ffffff',
-    panSpeed: 0.01,
-    visible: [],
-    visibility: {high: 0.5, low: 0, direction: 'up'},
-    z: 0.5
-  },
-  trees: {
-    enabled: true,
-    frequency: 0.005,
-    color: '#2e8b57',
-    panSpeed: 0.03,
-    visible: [],
-    visibility: {high: 0.7, low: 0.3, direction: "z"},
-    z: 1.5
-  },
-  mountains: {
-    enabled: true,
-    frequency: 0.01,
-    color: '#654321',
-    panSpeed: 0.015,
-    visible: [],
-    visibility: {high: 0.8, low: 0.5, direction: 'down'},
-    z: 1.2
-  }
-}
+  hills: { enabled: true, frequency: 0.03, color: "#1b6952", hillAmplitudes: [200, 100, 50], panSpeed: 0.02 },
+  stars: { enabled: true, frequency: 0.002, color: "#ffffff", panSpeed: 0.01 },
+  trees: { enabled: true, frequency: 0.005, color: "#2e8b57", panSpeed: 0.03 },
+  mountains: { enabled: true, frequency: 0.01, color: "#654321", panSpeed: 0.015 }
+};
+
 const genedBlockDefinitions = {
   0: { name: "empty", color: "#000000", colorVariation: { r: 0, g: 0, b: 0 } },
   1: { name: "grass", color: "#00cc00", colorVariation: { r: 30, g: 30, b: 30 } },
-  2: { name: "dirt",  color: "#964B00", colorVariation: { r: 30, g: 30, b: 30 } },
-  3: { name: "stone", color: "#888888", colorVariation: { r: 20, g: 20, b: 20 } },
-}
+  2: { name: "dirt", color: "#964B00", colorVariation: { r: 30, g: 30, b: 30 } },
+  3: { name: "stone", color: "#888888", colorVariation: { r: 20, g: 20, b: 20 } }
+};
 const floraBlockDefinitions = {
   4: { name: "treeTrunk", color: "#8B4513", colorVariation: { r: 20, g: 10, b: 5 } },
-  5: { name: "treeLeaves", color: "#228B22", colorVariation: { r: 20, g: 30, b: 20 } },
-}
-const playerBlockDefinitions = {
-  6: { name: "table", color: "#c9a26b", colorVariation: { r: 10, g: 10, b: 10 }, space: { nx: 1, px: 1, ny: 0, py: 2 } },
-  7: { name: "heart", color: "#ff66aa", colorVariation: { r: 10, g: 10, b: 10 }, space: { nx: 0, px: 0, ny: 0, py: 0 } },
+  5: { name: "treeLeaves", color: "#228B22", colorVariation: { r: 20, g: 30, b: 20 } }
 };
-const globalBlockPointers = {
-  ...genedBlockDefinitions,
-  ...floraBlockDefinitions,
-  ...playerBlockDefinitions
-}
+const playerBlockDefinitions = {
+  6: { name: "table", color: "#c9a26b", colorVariation: { r: 10, g: 10, b: 10 } },
+  7: { name: "heart", color: "#ff66aa", colorVariation: { r: 10, g: 10, b: 10 } }
+};
+const globalBlockPointers = { ...genedBlockDefinitions, ...floraBlockDefinitions, ...playerBlockDefinitions };
 
 function resizeCanvas() {
   canvas.width = window.innerWidth;
@@ -69,17 +45,13 @@ function resizeCanvas() {
 }
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
+
+// ----------------- utils -----------------
 function hexToRgb(hex) {
   const h = hex.startsWith("#") ? hex.slice(1) : hex;
-  return {
-    r: parseInt(h.slice(0, 2), 16),
-    g: parseInt(h.slice(2, 4), 16),
-    b: parseInt(h.slice(4, 6), 16),
-  };
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
 }
-function clampByte(n) {
-  return Math.max(0, Math.min(255, n | 0));
-}
+function clampByte(n) { return Math.max(0, Math.min(255, n | 0)); }
 function hash2i(x, y, seed = 1337) {
   let h = (x * 374761393) ^ (y * 668265263) ^ (seed * 1442695041);
   h = (h ^ (h >>> 13)) * 1274126177;
@@ -89,24 +61,15 @@ function noise2D(x, y) {
   const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
   return (s - Math.floor(s)) * 2 - 1;
 }
-function lerp(a,b,t){ return a + (b-a)*t; }
-function fade(t){ return t*t*(3-2*t); }
-function noise1D(x, seed=1234){
+function lerp(a, b, t) { return a + (b - a) * t; }
+function fade(t) { return t * t * (3 - 2 * t); }
+function noise1D(x, seed = 1234) {
   const x0 = Math.floor(x);
   const x1 = x0 + 1;
   const t = fade(x - x0);
   const v0 = ((hash2i(x0, 0, seed) & 0xffff) / 65536) * 2 - 1;
   const v1 = ((hash2i(x1, 0, seed) & 0xffff) / 65536) * 2 - 1;
   return lerp(v0, v1, t);
-}
-function worldToTile(wx, wy) {
-  return { tx: Math.floor(wx / blockSize), ty: Math.floor(wy / blockSize) };
-}
-function tileToChunk(tx, ty) {
-  return { cx: Math.floor(tx / chunkSize), cy: Math.floor(ty / chunkSize) };
-}
-function localInChunk(tx, ty, cx, cy) {
-  return { lx: tx - cx * chunkSize, ly: ty - cy * chunkSize };
 }
 function tileColor(type, tx, ty) {
   const def = globalBlockPointers[type] || genedBlockDefinitions[0];
@@ -121,15 +84,13 @@ function tileColor(type, tx, ty) {
   const b = clampByte(base.b + (((u1 + u2) * 0.5) - 0.5) * v.b);
   return `rgb(${r},${g},${b})`;
 }
-function clamp01(t){ return Math.max(0, Math.min(1, t)); }
-function easeOutCubic(t){ t = clamp01(t); return 1 - Math.pow(1 - t, 3); }
-function easeInOutCubic(t){
-  t = clamp01(t);
-  return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3)/2;
+
+function snapToBlock(wx) { return Math.floor(wx / blockSize) * blockSize; }
+function snapToGrid(wx, wy) {
+  return { wx: Math.floor(wx / blockSize) * blockSize, wy: Math.floor(wy / blockSize) * blockSize };
 }
 
-//
-
+// ----------------- scene manager -----------------
 class SceneManager {
   constructor(defs, startId, player) {
     this.defs = defs;
@@ -139,11 +100,14 @@ class SceneManager {
     this.state = {};
     this._events = [];
     this.player = player;
+
     this.entities = new Set();
     this.clickables = new Set();
+
     this.set(startId);
     this.drawer = new Drawer(player.camera, canvas, this);
   }
+
   set(id, payload = {}) {
     if (this.scene?.onExit) this.scene.onExit(this, payload);
     this.id = id;
@@ -153,11 +117,14 @@ class SceneManager {
     this._events = [];
     if (!this.scene) throw new Error(`Unknown scene: ${id}`);
     if (this.scene.onEnter) this.scene.onEnter(this, this.player, payload);
+    this.reloadClickables();
   }
+
   at(timeSec, fn) {
     this._events.push({ t: timeSec, fn, fired: false });
-    this._events.sort((a,b)=>a.t-b.t);
+    this._events.sort((a, b) => a.t - b.t);
   }
+
   update(dt) {
     this.t += dt;
     for (const ev of this._events) {
@@ -168,320 +135,529 @@ class SceneManager {
     }
     if (this.scene?.update) this.scene.update(this, dt);
   }
-  drawWorld(ctx, camera) {  
+
+  drawWorld(ctx, camera) {
     if (this.scene?.drawWorld) this.scene.drawWorld(this, ctx, camera);
   }
   drawOverlay(ctx) {
     if (this.scene?.drawOverlay) this.scene.drawOverlay(this, ctx);
   }
+
   reloadClickables() {
     this.clickables.clear();
+    // entities that mark themselves clickable
+    for (const e of this.entities) e.addToClickable?.(this);
+    // plus any scene-specified clickables
     if (this.scene?.addClickables) this.scene.addClickables(this);
   }
-  goto(id, payload) { this.set(id, payload); }
 
+  goto(id, payload) { this.set(id, payload); }
 }
+
+// ----------------- world/chunks -----------------
 class World {
-    constructor() {
-        this.chunks = new Map();
-        this.visibleChunks = [];
-        this.camPosition = { x: 0, y: 0 };
+  constructor() {
+    this.chunks = new Map();          // key -> Chunk
+    this.visibleChunks = [];          // array<Chunk>
+  }
+
+  key(cx, cy) { return `${cx},${cy}`; }
+
+  getChunk(cx, cy) {
+    const k = this.key(cx, cy);
+    if (!this.chunks.has(k)) this.chunks.set(k, new Chunk(cx, cy));
+    return this.chunks.get(k);
+  }
+
+  worldToChunk(wx, wy) {
+    const cx = Math.floor(wx / (chunkSize * blockSize));
+    const cy = Math.floor(wy / (chunkSize * blockSize));
+    return { cx, cy };
+  }
+
+  // keep a window of chunks around camera viewport
+  updateVisible(camera) {
+    const minCX = Math.floor(camera.x / (chunkSize * blockSize)) - 1;
+    const minCY = Math.floor(camera.y / (chunkSize * blockSize)) - 1;
+    const maxCX = Math.floor((camera.x + canvas.width) / (chunkSize * blockSize)) + 1;
+    const maxCY = Math.floor((camera.y + canvas.height) / (chunkSize * blockSize)) + 1;
+
+    const visible = [];
+    for (let cy = minCY; cy <= maxCY; cy++) {
+      for (let cx = minCX; cx <= maxCX; cx++) {
+        const ch = this.getChunk(cx, cy);
+        if (!ch._decorated) { ch.decorate(); ch._decorated = true; }
+        visible.push(ch);
+      }
     }
-    cameraVisibleChunks(camera) {
-        const currentlyVisible = new Set(this.visibleChunks.map(c => `${c.cx},${c.cy}`));
-        const visible = [];
-        const minCX = Math.floor(camera.x / (chunkSize * blockSize)) - 1;
-        const minCY = Math.floor(camera.y / (chunkSize * blockSize)) - 1;
-        const maxCX = Math.floor((camera.x + canvas.width) / (chunkSize * blockSize)) + 1;
-        const maxCY = Math.floor((camera.y + canvas.height) / (chunkSize * blockSize)) + 1;
-        //offload chunks that are no longer visible
-        for (const key of currentlyVisible) {
-            const [cx, cy] = key.split(",").map(Number);
-            if (cx < minCX || cx > maxCX || cy < minCY || cy > maxCY) {
-                this.visibleChunks = this.visibleChunks.filter(c => c.cx !== cx || c.cy !== cy);
-            }
-        }
-        //load new visible chunks
-        for (let cy = minCY; cy <= maxCY; cy++) {
-            for (let cx = minCX; cx <= maxCX; cx++) {
-                const key = `${cx},${cy}`;
-                if (this.chunks.has(key)) visible.push(this.chunks.get(key));
-                else {
-                    const chunk = new Chunk(cx, cy);
-                    this.chunks.set(key, chunk);
-                    visible.push(chunk);
-                }
-            }
-        }
-    }
-    getChunk(cx, cy) {
-        const key = `${cx},${cy}`;
-        if (!this.chunks.has(key)) this.chunks.set(key, new Chunk(cx, cy));
-        return this.chunks.get(key);
-    }
-    checkChunkKey(cx, cy) {
-        return this.chunks.has(`${cx},${cy}`);
-    }
-    createOrLoadChunk(cx, cy) {
-        const key = `${cx},${cy}`;
-        if (!this.chunks.has(key)) {
-            const chunk = new Chunk(cx, cy);
-            this.chunks.set(key, chunk);
-            return chunk;
-        }
-        return this.chunks.get(key);
-    }   
-    offloadChunks(camera) {
-        const minCX = Math.floor(camera.x / (chunkSize * blockSize)) - 2;
-        const minCY = Math.floor(camera.y / (chunkSize * blockSize)) - 2;
-        const maxCX = Math.floor((camera.x + canvas.width) / (chunkSize * blockSize)) + 2;
-        const maxCY = Math.floor((camera.y + canvas.height) / (chunkSize * blockSize)) + 2;
-        for (const key of this.chunks.keys()) {
-            const [cx, cy] = key.split(",").map(Number);
-            if (cx < minCX || cx > maxCX || cy < minCY || cy > maxCY) {
-                this.visibleChunks = this.visibleChunks.filter(c => c.cx !== cx || c.cy !== cy);
-            }
-        }
-    }
+    this.visibleChunks = visible;
+
+    // optional offload: not needed for basics; keep it simple
+  }
+
+  getBlockAt(wx, wy) {
+    const { cx, cy } = this.worldToChunk(wx, wy);
+    return this.getChunk(cx, cy).getBlockAt(wx, wy);
+  }
+  setBlockAt(wx, wy, type) {
+    const { cx, cy } = this.worldToChunk(wx, wy);
+    this.getChunk(cx, cy).setBlockAt(wx, wy, type);
+  }
+  removeBlockAt(wx, wy) {
+    const { cx, cy } = this.worldToChunk(wx, wy);
+    this.getChunk(cx, cy).setBlockAt(wx, wy, null);
+  }
 }
+
 class Chunk {
-    constructor(cx, cy) {
-        this.cx = cx;
-        this.cy = cy;
-        this.blocks = new Map();
-        this.floraViable = [];
-        this.floraEntities = [];
-        this.generateProcedural();
-    }
-    getBlockAt(wx, wy) {
-        const bx = wx - this.cx * chunkSize * blockSize;
-        const by = wy - this.cy * chunkSize * blockSize;
-        const key = `${bx},${by}`;
-        return this.blocks.get(key);
-    }
-    setBlockAt(wx, wy, type) {
-        const bx = wx - this.cx * chunkSize * blockSize;
-        const by = wy - this.cy * chunkSize * blockSize;
-        const key = `${bx},${by}`;
-        if (type === null) this.blocks.delete(key);
-        else this.blocks.set(key, { type });
-    }
-    generateProcedural() {
-        const baseSurfaceY = 35;
-        const heightVariation = 1;
-        const grassThickness = 3;
-        const dirtDepth = 8;
-        for (let by = 0; by < chunkSize * blockSize; by += blockSize) {
-            for (let bx = 0; bx < chunkSize * blockSize; bx += blockSize) {
-                const wx = this.cx * chunkSize * blockSize + bx;
-                const wy = this.cy * chunkSize * blockSize + by;
-                const height = noise2D(wx * 0.001, 0) * 100 + 200;
-                const surfaceY = height;
-                if (wy > surfaceY && wy <= surfaceY + grassThickness) {
-                    this.setBlockAt(wx, wy, 1); // Grass
-                    this.floraViable.push({ wx, wy: surfaceY }); // Store the top of the grass for flora placement
-                }
-                else if (wy > surfaceY + grassThickness && wy <= surfaceY + grassThickness + dirtDepth) {
-                    this.setBlockAt(wx, wy, 2); // Dirt
-                }
-                else if (wy > surfaceY + grassThickness + dirtDepth && wy <= baseSurfaceY + heightVariation) {
-                    this.setBlockAt(wx, wy, 3); // Stone
-                }
-            }
+  constructor(cx, cy) {
+    this.cx = cx;
+    this.cy = cy;
+    this.blocks = new Map(); // "bx,by" -> {type}
+    this.floraViable = [];
+    this._decorated = false;
+    this.generateProcedural();
+  }
+
+  // store blocks snapped to world-grid
+  _key(wx, wy) {
+    const bx = snapToBlock(wx) - this.cx * chunkSize * blockSize;
+    const by = snapToBlock(wy) - this.cy * chunkSize * blockSize;
+    return `${bx},${by}`;
+  }
+
+  getBlockAt(wx, wy) {
+    const key = this._key(wx, wy);
+    return this.blocks.get(key) ?? null;
+  }
+
+  setBlockAt(wx, wy, type) {
+    const key = this._key(wx, wy);
+    if (type == null || type === 0) this.blocks.delete(key);
+    else this.blocks.set(key, { type });
+  }
+
+  // SIMPLE procedural terrain: uses world Y as pixels.
+  // (This is intentionally crude but stable for rendering.)
+  generateProcedural() {
+    const worldX0 = this.cx * chunkSize * blockSize;
+    const worldY0 = this.cy * chunkSize * blockSize;
+
+    const grassThicknessPx = 2 * blockSize;
+    const dirtDepthPx = 6 * blockSize;
+
+    for (let by = 0; by < chunkSize * blockSize; by += blockSize) {
+      for (let bx = 0; bx < chunkSize * blockSize; bx += blockSize) {
+        const wx = worldX0 + bx;
+        const wy = worldY0 + by;
+
+        // height line in world pixels
+        const surface = 220 + noise2D(wx * 0.0025, 0.5) * 40; // pixels down
+        const top = surface;
+
+        if (wy >= top && wy < top + grassThicknessPx) {
+          this.setBlockAt(wx, wy, 1);
+          // viable point is the top block position
+          if (wy === Math.floor(top / blockSize) * blockSize) this.floraViable.push({ wx, wy });
+        } else if (wy >= top + grassThicknessPx && wy < top + grassThicknessPx + dirtDepthPx) {
+          this.setBlockAt(wx, wy, 2);
+        } else if (wy >= top + grassThicknessPx + dirtDepthPx) {
+          this.setBlockAt(wx, wy, 3);
         }
+      }
     }
-    decorate() {
-        for (const spot of this.floraViable) {
-            const r = Math.random();
-            if (r < 0.05) {
-                const flowerType = Math.random() < 0.5 ? "red" : "yellow";
-                entities.add(new FlowerEntity(spot.wx, spot.wy, flowerType));
-            }
-            else if (r < 0.1) {
-                entities.add(new TreeEntity(spot.wx, spot.wy));
-            }
-        }
-    }
+  }
+
+  // placeholder: no entity classes required for rendering blocks
+  decorate() {
+    // keep empty for now (you can add FlowerEntity/TreeEntity later)
+  }
 }
+
+// ----------------- entities -----------------
 class Entity {
-  constructor(wx, wy, clickable, radius = 0) {
+  constructor(wx, wy, clickable = false, radius = 0) {
     this.wx = wx;
     this.wy = wy;
-
     this.vx = 0;
     this.vy = 0;
     this.clickable = clickable;
-    this.isHeld = false;
     this.radius = radius;
-    this.rotation = 0;
-    this.scale = 1;
     this.alive = true;
     this.z = 0;
   }
+  update(dt) { this.wx += this.vx * dt; this.wy += this.vy * dt; }
+  addToClickable(scene) { if (this.clickable) scene.clickables.add(this); }
+  hitTest(wx, wy) {
+    const dx = wx - this.wx, dy = wy - this.wy;
+    return (dx * dx + dy * dy) <= (this.radius * this.radius);
+  }
+  draw(ctx, camera) {
+    // minimal default visualization
+    const sx = this.wx - camera.x;
+    const sy = this.wy - camera.y;
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.beginPath();
+    ctx.arc(sx, sy, Math.max(3, this.radius || 6), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+class HeartEntity extends Entity {
+  constructor(wx, wy) {
+    super(wx, wy, false, 10);
+    this.vy = -60;
+    this.life = 1.8;
+  }
   update(dt) {
+    this.life -= dt;
+    if (this.life <= 0) { this.alive = false; return; }
+    this.vy += 140 * dt;
     this.wx += this.vx * dt;
     this.wy += this.vy * dt;
   }
-  addToClickable(scene) {
-    if (this.clickable) {
-        scene.clickables.add(this);
-    }
-  }
-  hitTest(wx, wy) {
-    const dx = wx - this.wx, dy = wy - this.wy;
-    return (dx*dx + dy*dy) <= (this.radius*this.radius);
-  }
   draw(ctx, camera) {
+    const x = this.wx - camera.x;
+    const y = this.wy - camera.y;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, this.life / 1.8));
+    ctx.fillStyle = "pink";
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.bezierCurveTo(x - 6, y - 6, x - 12, y + 4, x, y + 12);
+    ctx.bezierCurveTo(x + 12, y + 4, x + 6, y - 6, x, y);
+    ctx.fill();
+    ctx.restore();
   }
 }
+
+// ----------------- player/tools -----------------
 class Player {
-    constructor() {
-        this.sm = null;
-        this.camera = { x: 0, y: 0 };
-        this.mouse = { x: 0, y: 0, down: false };
-        this.input = { down: Object.create(null), pressed: Object.create(null), released: Object.create(null) };
-        this.vx = 0; this.vy = 0;
-        this._bindEvents();
+  constructor() {
+    this.sm = null;
+    this.camera = { x: 0, y: 0 };
+    // FIX: your code uses sx/sy/clicked; keep that shape.
+    this.mouse = { sx: 0, sy: 0, down: false, clicked: false };
+    this.input = { down: Object.create(null), pressed: Object.create(null), released: Object.create(null) };
+    this._bindEvents();
 
-        this.inventory = {
-            toolIndex: 0,
-            placeIndex: 0,
-            flowers: [],
-            blocks: new Map(),
-        };
-        this.tools = new Toolbelt(this);
-    }
-    _bindEvents() {
-        const c = canvas;
-        c.addEventListener("mousemove", (e) => {
-        const r = c.getBoundingClientRect();
-        this.mouse.sx = e.clientX - r.left;
-        this.mouse.sy = e.clientY - r.top;
-        });
-        c.addEventListener("mousedown", () => { this.mouse.down = true; this.mouse.clicked = true; });
-        window.addEventListener("mouseup", () => { this.mouse.down = false; });
+    this.inventory = {
+      toolIndex: 0,
+      placeIndex: 1, // default place grass
+      flowers: [],
+      blocks: new Map()
+    };
+    this.tools = new Toolbelt(this);
+  }
 
-        window.addEventListener("keydown", (e) => {
-        if (!this.input.down[e.key]) this.input.pressed[e.key] = true;
-        this.input.down[e.key] = true;
-        });
-        window.addEventListener("keyup", (e) => {
-        this.input.down[e.key] = false;
-        this.input.released[e.key] = true;
-        });
-    }
-    beginFrame() {
-        this.input.pressed = Object.create(null);
-        this.input.released = Object.create(null);
-        this.mouse.clicked = false;
-    }
-    isDown(key) { return !!this.input.down[key]; }
-    wasPressed(key) { return !!this.input.pressed[key]; }
-    wasReleased(key) { return !!this.input.released[key]; }
+  _bindEvents() {
+    const c = canvas;
+    c.addEventListener("mousemove", (e) => {
+      const r = c.getBoundingClientRect();
+      this.mouse.sx = e.clientX - r.left;
+      this.mouse.sy = e.clientY - r.top;
+    });
+    c.addEventListener("mousedown", () => { this.mouse.down = true; this.mouse.clicked = true; });
+    window.addEventListener("mouseup", () => { this.mouse.down = false; });
 
-    screenToWorld(sx, sy) { return { wx: sx + this.camera.x, wy: sy + this.camera.y }; }
-    mouseWorld() { return this.screenToWorld(this.mouse.sx, this.mouse.sy); }
-    update(dt) {
-        const speed = 300;
-        let dx = 0, dy = 0;
-        if (this.isDown("ArrowLeft") || this.isDown("a")) dx -= 1;
-        if (this.isDown("ArrowRight") || this.isDown("d")) dx += 1;
-        if (this.isDown("ArrowUp") || this.isDown("w")) dy -= 1;
-        if (this.isDown("ArrowDown") || this.isDown("s")) dy += 1;
-        if (dx || dy) { this.camera.x += dx * speed * dt; this.camera.y += dy * speed * dt; }
-        if (this.mouse.clicked) this.tools.useCurrentTool(this.sm.scene);
-        
-    }
-    clickedOn(x, y, hitboxSize = 20) {
-        const { wx, wy } = this.mouseWorld();
-        return Math.abs(wx - x) <= hitboxSize && Math.abs(wy - y) <= hitboxSize;
-    }
-    invGet(type){ return this.inventory.blocks.get(type) ?? 0; }
-    invAdd(type, n=1){ this.inventory.blocks.set(type, this.invGet(type) + n); }
-    invSpend(type, n=1){
-        const have = this.invGet(type);
-        if (have < n) return false;
-        this.inventory.blocks.set(type, have - n);
-        return true;
-    }
+    window.addEventListener("keydown", (e) => {
+      if (!this.input.down[e.key]) this.input.pressed[e.key] = true;
+      this.input.down[e.key] = true;
+    });
+    window.addEventListener("keyup", (e) => {
+      this.input.down[e.key] = false;
+      this.input.released[e.key] = true;
+    });
+  }
+
+  beginFrame() {
+    this.input.pressed = Object.create(null);
+    this.input.released = Object.create(null);
+    this.mouse.clicked = false;
+  }
+
+  isDown(key) { return !!this.input.down[key]; }
+  wasPressed(key) { return !!this.input.pressed[key]; }
+
+  screenToWorld(sx, sy) { return { wx: sx + this.camera.x, wy: sy + this.camera.y }; }
+  mouseWorld() { return this.screenToWorld(this.mouse.sx, this.mouse.sy); }
+
+  invGet(type) { return this.inventory.blocks.get(type) ?? 0; }
+  invAdd(type, n = 1) { this.inventory.blocks.set(type, this.invGet(type) + n); }
+  invSpend(type, n = 1) {
+    const have = this.invGet(type);
+    if (have < n) return false;
+    this.inventory.blocks.set(type, have - n);
+    return true;
+  }
+
+  update(dt) {
+    const speed = 300;
+    let dx = 0, dy = 0;
+    if (this.isDown("ArrowLeft") || this.isDown("a")) dx -= 1;
+    if (this.isDown("ArrowRight") || this.isDown("d")) dx += 1;
+    if (this.isDown("ArrowUp") || this.isDown("w")) dy -= 1;
+    if (this.isDown("ArrowDown") || this.isDown("s")) dy += 1;
+    if (dx || dy) { this.camera.x += dx * speed * dt; this.camera.y += dy * speed * dt; }
+
+    if (this.mouse.clicked && this.sm?.scene) this.tools.useCurrentTool(this.sm.scene);
+  }
 }
+
 class Toolbelt {
-    constructor(player) {
-        this.player = player;
-        this.toolIndex = 0;
-        this.blockIndex = 0;
-        this.tools = {
-            0: { name: "Hand", action: (scene) => {
-                const { wx, wy } = this.player.mouseWorld();
-                for (const ent of scene.clickables) {
-                    if (ent.hitTest(wx, wy)) {
-                        if (ent.onClick) ent.onClick(scene, this.player);
-                        break;
-                    }
-                }
-             }},
-            1: { name: "Shovel", action: (scene) => {
-                const { wx, wy } = this.player.mouseWorld();
-                const block = scene.getBlockAt(wx, wy);
-                if (block) {
-                    scene.removeBlockAt(wx, wy);
-                    this.player.invAdd(block.type);
-                }
-            }},
-            2: { name: "Placer", action: (scene) => {
-                const { wx, wy } = this.player.mouseWorld();
-                const blockType = this.player.inventory.placeIndex;
-                if (this.player.invGet(blockType) > 0) {
-                    scene.placeBlockAt(wx, wy, blockType);
-                    this.player.invSpend(blockType);
-                }
-            }},
-            3: { name: "FlowerPicker", action: (scene) => {
-                const { wx, wy } = this.player.mouseWorld();
-                for (const ent of scene.clickables) {
-                    if (ent.hitTest(wx, wy) && ent instanceof FlowerEntity) {
-                        this.player.inventory.flowers.push(ent.flowerType);
-                        ent.alive = false;
-                        break;
-                    }
-                }
-            }},
-            4: { name: "HeartWand", action: (scene) => {
-                const { wx, wy } = this.player.mouseWorld();
-                const heart = new HeartEntity(wx, wy);
-                scene.addEntity(heart);
-                }
-            }
+  constructor(player) {
+    this.player = player;
+    this.toolIndex = 0;
+    this.tools = {
+      0: { name: "Hand", action: (scene) => {
+        const { wx, wy } = this.player.mouseWorld();
+        for (const ent of scene.clickables) {
+          if (ent.hitTest(wx, wy)) { ent.onClick?.(scene, this.player); break; }
         }
-    }
-    currentTool() { return this.tools[this.toolIndex]; }
-    useCurrentTool(scene) {
-        const tool = this.currentTool();
-        if (tool && tool.action) tool.action(scene);
-    }
-}
-class Drawer {
-    constructor(camera, canvas, scene) {
-        this.camera = camera;
-        this.canvas = canvas;
-        this.scene = scene;
-        this.backgroundData = {};
-        thi
-    }
-    initBackground() {
-    }
-    drawBackground() {
-    }
-    drawVisibleChunk(cx,cy) {
-    }
-    drawEntity(ent) {
-    }
-    drawHUD() {
-    }
-    drawTile(type, sx, sy) {
-    }
-    worldToScreen(wx, wy) {
-        return { sx: wx - this.camera.x, sy: wy - this.camera.y };
-    }
+      }},
+      1: { name: "Shovel", action: (scene) => {
+        const { wx, wy } = this.player.mouseWorld();
+        const block = scene.getBlockAt(wx, wy);
+        if (block) { scene.removeBlockAt(wx, wy); this.player.invAdd(block.type, 1); }
+      }},
+      2: { name: "Placer", action: (scene) => {
+        const { wx, wy } = this.player.mouseWorld();
+        const type = this.player.inventory.placeIndex;
+        if (type <= 0) return;
+        if (this.player.invGet(type) <= 0) return;
+        // only place into empty
+        if (scene.getBlockAt(wx, wy)) return;
+        scene.placeBlockAt(wx, wy, type);
+        this.player.invSpend(type, 1);
+      }},
+      3: { name: "HeartWand", action: (scene) => {
+        const { wx, wy } = this.player.mouseWorld();
+        scene.addEntity(new HeartEntity(wx, wy));
+      }}
+    };
+  }
+
+  currentTool() { return this.tools[this.toolIndex] ?? this.tools[0]; }
+  useCurrentTool(scene) { this.currentTool().action?.(scene); }
 }
 
+// ----------------- drawer -----------------
+class Drawer {
+  constructor(camera, canvas, sm) {
+    this.camera = camera;
+    this.canvas = canvas;
+    this.sm = sm;
+  }
+
+  worldToScreen(wx, wy) { return { sx: wx - this.camera.x, sy: wy - this.camera.y }; }
+
+  drawBackground(now) {
+    const w = canvas.width, h = canvas.height;
+
+    // sky gradient
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, "#071a2a");
+    sky.addColorStop(1, "#0b3b3a");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // cheap stars
+    if (backgroundSettings.stars.enabled) {
+      const par = backgroundSettings.stars.panSpeed;
+      const ox = this.camera.x * par;
+      const oy = this.camera.y * par;
+
+      ctx.save();
+      ctx.fillStyle = backgroundSettings.stars.color;
+      for (let i = 0; i < 180; i++) {
+        const sx = (hash2i(i, 1, 777) % w) - (ox % w);
+        const sy = (hash2i(i, 2, 999) % h) - (oy % h);
+        ctx.globalAlpha = 0.2 + ((hash2i(i, 3, 555) & 255) / 255) * 0.6;
+        ctx.fillRect((sx + w) % w, (sy + h) % h, 1, 1);
+      }
+      ctx.restore();
+    }
+
+    // hills line (1D noise)
+    if (backgroundSettings.hills.enabled) {
+      const hill = backgroundSettings.hills;
+      const { r, g, b } = hexToRgb(hill.color);
+      const baseline = h * 0.85;
+      const freq = hill.frequency ?? 0.004;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(0, h);
+      for (let x = 0; x <= w; x++) {
+        const nx = (x + this.camera.x * hill.panSpeed) * freq + now * 0.00008;
+        const n = noise1D(nx, 1000);
+        const y = baseline - n * (hill.hillAmplitudes[0] * 0.25);
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(w, h);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(${r},${g},${b},0.95)`;
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  drawWorldBlocks(world) {
+    // draw only visible chunks for speed
+    for (const ch of world.visibleChunks) {
+      const x0 = ch.cx * chunkSize * blockSize;
+      const y0 = ch.cy * chunkSize * blockSize;
+
+      for (const [k, b] of ch.blocks) {
+        const [bx, by] = k.split(",").map(Number);
+        const wx = x0 + bx;
+        const wy = y0 + by;
+        const sx = wx - this.camera.x;
+        const sy = wy - this.camera.y;
+
+        if (sx + blockSize < 0 || sy + blockSize < 0 || sx > canvas.width || sy > canvas.height) continue;
+
+        const tx = Math.floor(wx / blockSize);
+        const ty = Math.floor(wy / blockSize);
+
+        ctx.fillStyle = tileColor(b.type, tx, ty);
+        ctx.fillRect(sx, sy, blockSize, blockSize);
+      }
+    }
+  }
+
+  drawEntities(entities) {
+    const sorted = [...entities].sort((a, b) => (a.z - b.z) || (a.wy - b.wy));
+    for (const e of sorted) e.draw(ctx, this.camera);
+  }
+
+  drawHUD(player) {
+    const tool = player.tools.currentTool();
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(10, 10, 260, 70);
+    ctx.fillStyle = "white";
+    ctx.font = "14px system-ui, sans-serif";
+    ctx.fillText(`Tool: ${tool?.name ?? "?"} (1-4)`, 18, 32);
+    ctx.fillText(`Blocks: grass=${player.invGet(1)} dirt=${player.invGet(2)} stone=${player.invGet(3)}`, 18, 52);
+    ctx.fillText(`PlaceIndex: ${player.inventory.placeIndex} (Z/X to change)`, 18, 70);
+    ctx.restore();
+  }
+}
+
+// ----------------- a concrete scene -----------------
+class GardenScene {
+  constructor() {
+    this.world = new World();
+    this.clickables = new Set(); // required by Toolbelt
+    this.entities = new Set();   // required by Toolbelt
+  }
+
+  onEnter(sm, player) {
+    player.sm = sm;
+    // starting camera
+    player.camera.x = -canvas.width / 2;
+    player.camera.y = 0;
+
+    // seed inventory so placer works
+    player.invAdd(1, 200);
+    player.invAdd(2, 200);
+    player.invAdd(3, 200);
+  }
+
+  // methods Toolbelt expects
+  getBlockAt(wx, wy) { return this.world.getBlockAt(wx, wy); }
+  placeBlockAt(wx, wy, type) { this.world.setBlockAt(wx, wy, type); }
+  removeBlockAt(wx, wy) { this.world.removeBlockAt(wx, wy); }
+  addEntity(ent) { this.entities.add(ent); }
+
+  update(sm, dt) {
+    // update world visibility
+    this.world.updateVisible(sm.player.camera);
+
+    // update entities
+    for (const e of this.entities) e.update(dt);
+    for (const e of this.entities) if (!e.alive) this.entities.delete(e);
+
+    // refresh clickables if you later add clickable entities
+    this.clickables.clear();
+    for (const e of this.entities) e.addToClickable?.({ clickables: this.clickables });
+  }
+
+  drawWorld(sm, ctx, camera) {
+    // world blocks + entities are drawn by Drawer in main loop for now
+  }
+
+  drawOverlay(sm, ctx) {
+    // minimal overlay
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "24px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Garden Scene", canvas.width / 2, 42);
+    ctx.restore();
+  }
+}
+
+// ----------------- bootstrap -----------------
+const player = new Player();
+
+const scenes = {
+  garden: new GardenScene()
+};
+
+const SM = new SceneManager(
+  {
+    garden: {
+      onEnter(sm, player) { scenes.garden.onEnter(sm, player); },
+      update(sm, dt) { scenes.garden.update(sm, dt); },
+      drawWorld(sm, ctx, camera) { scenes.garden.drawWorld(sm, ctx, camera); },
+      drawOverlay(sm, ctx) { scenes.garden.drawOverlay(sm, ctx); }
+    }
+  },
+  "garden",
+  player
+);
+
+// quick keybinds for tool selection + placer type
+window.addEventListener("keydown", (e) => {
+  if (e.key === "1") player.tools.toolIndex = 0;
+  if (e.key === "2") player.tools.toolIndex = 1;
+  if (e.key === "3") player.tools.toolIndex = 2;
+  if (e.key === "4") player.tools.toolIndex = 3;
+
+  if (e.key === "z") player.inventory.placeIndex = Math.max(1, player.inventory.placeIndex - 1);
+  if (e.key === "x") player.inventory.placeIndex = Math.min(3, player.inventory.placeIndex + 1);
+});
+
+// ----------------- main loop -----------------
+function loop(now) {
+  if (!loop.last) loop.last = now;
+  const dt = Math.min(0.05, (now - loop.last) / 1000);
+  loop.last = now;
+
+  player.update(dt);
+  SM.update(dt);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // background
+  SM.drawer.drawBackground(now);
+
+  // world blocks (from current scene)
+  const sceneObj = scenes.garden;
+  SM.drawer.drawWorldBlocks(sceneObj.world);
+
+  // entities
+  SM.drawer.drawEntities(sceneObj.entities);
+
+  // HUD + overlays
+  SM.drawer.drawHUD(player);
+  SM.drawOverlay(ctx);
+
+  player.beginFrame();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
