@@ -39,6 +39,14 @@ const timeSettings = {
 const petalShapes = { triangle: [{x:0,y:-1},{x:-0.5,y:0.5},{x:0.5,y:0.5}], oval: { arc:{x:0,y:0}, radiusX:0.5, radiusY:1 } };
 const leafShapes = { oval: { arc:{x:0,y:0}, radiusX:0.5, radiusY:1 } };
 const flowerLimits = { petalCount:{min:3,max:8}, leafCount:{min:2,max:5}, stemHeight:{min:1,max:3} };
+let bigFlowerLims = {
+    maxDepth: 1,
+    maxSegmentsPerBranch: 10,
+    baseLen: 8,
+    lenJitter: 0.65,
+    branchProb: 0.5,
+    branchSpread: 0.3,
+}
 const genedBlockDefinitions = {
   0: { name: "empty", color: "#000000", colorVariation: { r: 0, g: 0, b: 0 } },
   1: { name: "grass", color: "#00cc00", colorVariation: { r: 30, g: 30, b: 30 } },
@@ -252,7 +260,11 @@ class Chunk {
       }
     }
   }
-  decorate(spawnEntity, f = 6, t = 10, b = 26) {
+  decorate(spawnEntity, f, t, b) {
+    if (!f) f = 6
+    if (!t) t = 18
+    if (!b) b = 20
+
     for (const p of this.floraViable) {
       const tx = Math.floor(p.wx / blockSize);
       const ty = Math.floor(p.wy / blockSize);
@@ -426,6 +438,9 @@ class Drawer {
     const w = this.canvas.width, h = this.canvas.height;
     const time = (now * timeSettings.dayNightCycleSpeed) % 1;
     const dayFactor = 0.5 + 0.5 * Math.cos(time * Math.PI * 2);
+    const pivotPoint = {x: 0, y:h}
+    const sunAngle = time * Math.PI * 2 - Math.PI / 2;
+    const starAngle = (time * backgroundSettings.stars.panSpeed * Math.PI * 2) % (Math.PI * 2);
     const topSkyColor = this.blendColors({
         midnight: backgroundSettings.sky.colors.midnight.top,
         noon: backgroundSettings.sky.colors.noon.top,
@@ -440,15 +455,15 @@ class Drawer {
     grad.addColorStop(0, topSkyColor);
     grad.addColorStop(1, bottomSkyColor);
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);    
+    ctx.fillRect(0, 0, w, h);
     const colorBlendFactor = dayFactor; 
     const sunTimePhase = (time + 0.2) % 1
     if (backgroundSettings.sun.enabled) {
     ctx.filter = 'blur(3px)'
         const sunColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
         ctx.fillStyle = sunColor;
-        const sunX = w * sunTimePhase;
-        const sunY = h * 0.5 - Math.sin(sunTimePhase * Math.PI * 2.2) * timeSettings.sunPathHeight;
+        const sunX = pivotPoint.x + Math.cos(sunAngle) * (w + timeSettings.sunPathHeight);
+        const sunY = pivotPoint.y + Math.sin(sunAngle) * (w + timeSettings.sunPathHeight);
         const alphaBase = timeSettings.timeOpacities.day.sun ?? 1.0;
         ctx.globalAlpha = alphaBase * ((dayFactor <= 0.5) ? (1 - dayFactor) / 0.5 : 1);
         ctx.beginPath();
@@ -458,15 +473,14 @@ class Drawer {
     }
     ctx.globalAlpha = 1.0;
     if (backgroundSettings.stars.enabled) {        
-        const worldRotate = time * backgroundSettings.stars.panSpeed * 360;
         const pan = (time * backgroundSettings.stars.panSpeed) % 1;
         const alphaBase = timeSettings.timeOpacities.day.stars ?? 0.5;
         ctx.fillStyle = this.blendColors(backgroundSettings.stars.colors, colorBlendFactor);
         // ctx.globalAlpha = alphaBase * ((dayFactor >= 0.5) ? (1 - dayFactor) / 0.5 : 1);
         for (let i=0; i < backgroundSettings.stars.frequency; i++) {
             const winkle = 0.5 + 1.5 * Math.sin(time * Math.random() * 10);
-            const starX = (noise1D(i * 0.1, 2555) + 1) * 0.5 * w + pan * w;
-            const starY = (noise1D(i * 0.1, 2556) + 1) * 0.5 * h + pan * h;
+            const starX = starAngle * 100 + (noise1D(i * 0.9, 1234) + 1) * w  ;
+            const starY = starAngle * 1000 + (noise1D(i * 0.9, 4321) + 1) * h ;
             const starSize = Math.max(0.5, noise1D(i * 0.1, 5557) * 1.5  * winkle);
             ctx.beginPath();
             ctx.arc(starX, starY, starSize, 0, Math.PI * 2);
@@ -498,7 +512,7 @@ class Drawer {
 
   }
   drawParallaxLayer(layerKey, frequency, panSpeed, w, h, baseH) {
-    const offset = ( panSpeed * 0.1) % w;
+    const offset = ( panSpeed * 0.5) % w;
     ctx.beginPath();
     let y = h * 0.6 * baseH;    
     for (let x = -w; x < w * 2; x += 10) {
@@ -886,24 +900,24 @@ class Drawer {
     ctx.restore();
   }
   bouquetPreview(player){
-        if (player.bouquetPreview?.enabled) {
-            const mw = player.mouseWorld();
-            const tx = Math.floor(mw.wx / blockSize);
-            const ty = Math.floor(mw.wy / blockSize);
-            const wx = tx * blockSize + blockSize / 2;
-            const wy = ty * blockSize + blockSize / 2;
+    if (player.bouquetPreview?.enabled) {
+        if (player.heldBouquet) return;
+        const mw = player.mouseWorld();
+        const tx = Math.floor(mw.wx / blockSize);
+        const ty = Math.floor(mw.wy / blockSize);
+        const wx = tx * blockSize + blockSize / 2;
+        const wy = ty * blockSize + blockSize / 2;
 
-            const n = Math.min(player.bouquetPreview.maxStems, player.inventory.flowers.length);
-            if (n > 0) {
-            this.drawBouquetGhost(
-                wx - player.camera.x,
-                wy - player.camera.y,
-                player.inventory.flowers.slice(0, n),
-                { alpha: 0.55, maxStems: n, fan: 0.9, stemLen: 34, headR: 7 }
-            );
-
-            }
-        }
+        const n = Math.min(player.bouquetPreview.maxStems, player.inventory.flowers.length);
+        if (n > 0) {
+        this.drawBouquetGhost(
+            wx - player.camera.x,
+            wy - player.camera.y,
+            player.inventory.flowers.slice(0, n),
+            { alpha: 0.55, maxStems: n, fan: 0.9, stemLen: 34, headR: 7 }
+        );
+      }
+    }
   }
 }
 
@@ -1059,19 +1073,20 @@ class FlowerEntity extends Entity {
   }
   interaction(scene, player) {
     if (player.tools.isCurrentTool("Hand")){
-        // update or create an in-world bouquet that follows the mouse (ghost)
-        if (player.bouquetPreview.enabled) {
-          if (player.heldBouquet) {
-            player.heldBouquet.flowers = player.inventory.flowers.slice();
-          } else {
-            const bouquet = new BouquetEntity(this.tx, this.ty, player.inventory.flowers.slice());
-            bouquet.initAsHeld();
-            player.heldBouquet = bouquet;
-            scene.entities.add(bouquet);
-          }
-        }
-        //pick flower
-        scene.entities.delete(this);
+        player.inventory.flowers.push(this.exportDrawData());
+        player.invAdd(4,1)
+        // if (player.bouquetPreview.enabled) {
+        //   if (player.heldBouquet) {
+        //     player.heldBouquet.flowers = player.inventory.flowers.slice();
+        //   } else {
+        //     const bouquet = new BouquetEntity(this.tx, this.ty, player.inventory.flowers.slice());
+        //     bouquet.initAsHeld();
+        //     player.heldBouquet = bouquet;
+        //     scene.entities.add(bouquet);
+        //   }
+        // }
+        // scene.entities.delete(this);
+
     } else if (player.tools.isCurrentTool("HeartWand")){
       //multiple hearts spawn outwards
       for (let i = 0; i < 6; i++) {
@@ -1112,12 +1127,12 @@ class BigFlower extends Entity {
     this.explodeDur = 0.9;
     this.noAttachAfterExplode = true;
 
-    this.maxDepth = 3;
-    this.maxSegmentsPerBranch = 10;
-    this.baseLen = 4;
-    this.lenJitter = 0.65;
-    this.branchProb = 0.2;
-    this.branchSpread = Math.PI * 0.2;
+    this.maxDepth = bigFlowerLims.maxDepth;
+    this.maxSegmentsPerBranch = bigFlowerLims.maxSegmentsPerBranch;
+    this.baseLen = bigFlowerLims.baseLen;
+    this.lenJitter = bigFlowerLims.lenJitter;
+    this.branchProb = bigFlowerLims.branchProb;
+    this.branchSpread = Math.PI * bigFlowerLims.branchSpread;
     this.trunkUpAngle = -Math.PI / 2;
     this.type = "bigFlower";
     this.generate();
@@ -1421,6 +1436,15 @@ class CustomSpawner{
             this.scene.entities.add(ent);
         }
     }
+    lineOfBigFlowers(amt, spacing, pos, length){
+        for (let i = 0; i < amt; i++){
+            const wx = this.def.wx + (i - (amt-1)/2) * spacing;
+            const wy = this.def.wy;
+            const flower = new BigFlower(wx, wy, hash2i(wx, wy, 12345));
+            flower.delay = i * 0.3;
+            this.scene.entities.add(flower);
+        }
+    }
     update(dt, sm){
         if (!this.needed) return;
         switch(this.def.type){
@@ -1431,6 +1455,9 @@ class CustomSpawner{
             case "flowerBurst": {
                 this.simpleRadiusOutwards(18, 120, 8, FlowerParticle);
                 break;
+            }
+            case "lineOfBigFlowers": {
+                this.lineOfBigFlowers(7, 48, {wx: this.def.wx, wy: this.def.wy}, 120);
             }
         }
         this.needed = false;
@@ -1521,7 +1548,7 @@ class Scene {
     drawer.drawBackground(controlledNow);
     drawer.drawWorldBlocks(this.world);
     drawer.drawEntities(this.entities);
-    drawer.drawHUD(player);
+    // drawer.drawHUD(player);
     drawer.drawMessageBox(this.MSG);
   }
   drawOverlay(sm) {
@@ -1537,9 +1564,18 @@ class ValentineScene extends Scene {
     constructor() {
         super();
         this.type = "valentineScene";
+        this.autoPop = {
+            active:true, t:0,
+            dur:6.0, every:0.12,
+            acc:0, perTick:2,
+            requireOnScreen:true,
+            noneLeft: false,
+            renew: true
+        }
         this.messageQueue = [
             "hello",
         ]
+        this.spawners.push(new CustomSpawner(this, {type:"lineOfBigFlowers", wx:100, wy:100}));
     }
     onEnter(sm, player, payload = {}) {
         this.world.updateVisible(player.camera, (ent) => this.entities.add(ent));
@@ -1547,11 +1583,55 @@ class ValentineScene extends Scene {
         if (payload.messages?.length){
             this.startMessages(payload.messages);
         }
-        //get first chunk
         const chunk = this.world.getChunk(0, 0);
-        if (chunk) {
-            chunk.decorate(null, 70,70,1)
+        if (chunk) chunk.decorate((ent)=>this.entities.add(ent), 70,70,2)
+        
+        
+    }
+    update(sm, dt){
+        super.update(sm, dt)
+        this._autoExplodeBigFlowers(sm,dt)
+    }
+    _autoExplodeBigFlowers(sm,dt){
+        const ap = this.autoPop;
+        if (!ap.active) return
+        ap.t += dt;
+        if (ap.t >= ap.dur) {ap.active = false}
+        ap.acc += dt;
+        while(ap.acc >= ap.every){
+            ap.acc -= ap.every;
+            this._popSomeBigFlowers(sm, ap.perTick, ap.requireOnScreen);
         }
+        if (!ap.noneLeft && ap.renew) this.renewFlowers()
+    }
+    _popSomeBigFlowers(sm, count, requireOnScreen){
+        const cam = sm.player.camera;
+        const w = canvas.width, h = canvas.height;
+        const candidates = [];
+        for (const e of this.entities){
+            if (e.type !== "bigFlower" ) continue;
+            if (e.mode === "exploding") continue;
+            if (!(e.mode === "blossom" || e.grow >=98)) continue;
+            if (requireOnScreen){
+                const sx = e.wx - cam.x;
+                const sy = e.wy - cam.y;
+            }
+            candidates.push(e)
+        }
+        if (candidates.length===0) return;
+        for (let i=0; i<count; i++){
+            const idx = (Math.random()*candidates.length) | 0;
+            const bf = candidates[idx];
+            if (!bf) return;
+            bf.explode(this)
+            candidates.splice(idx,1)
+            if (candidates.length === 0) {
+                this.autoPop.noneLeft = true;
+            }
+        }
+    }
+    renewFlowers(){
+        console.log(this.spawners)
     }
 }
 
@@ -1564,7 +1644,7 @@ const scenes = {
 };
 const SM = new SceneManager(
   {scene: scenes.scene, valentine: scenes.valentine},
-  "scene",
+  "valentine",
   player
 );
 player.sm = SM;
