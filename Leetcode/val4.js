@@ -1,6 +1,8 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+const blockSize = 10;
+const chunkSize = 16;
 const backgroundSettings = {
   hills: { enabled: true, frequency: 0.03, colors: {midnight: "#1b6952", noon: "#87ceeb", sunset: "#ff4500"}, hillAmplitudes: [200, 100, 50], panSpeed: 0.02 },
   stars: { enabled: true, frequency: 0.002, colors: {midnight: "#ffffff", noon: "#aaf2ff", sunset: "#ff4500"}, panSpeed: 0.01 },
@@ -100,12 +102,13 @@ class SceneManager {
     this.t = 0;
     this.state = {};
     this._events = [];
-    this.set(startId);
 
     this.entities = new Set();
     this.clickables = new Set();
-    this.drawer = new Drawer(player.camera, canvas, this);
+    this.spawners = [];
     this.player = player;
+    this.set(startId);
+    this.drawer = new Drawer(player.camera, canvas, this);
   }
     set(id, payload = {}) {
     if (this.scene?.onExit) this.scene.onExit(this, payload);
@@ -410,6 +413,59 @@ class Drawer {
     const dayFactor = Math.max(0, Math.cos(time * Math.PI * 2));
     const sunsetFactor = 1 - Math.abs(dayFactor);
     const nightFactor = 1 - dayFactor;
+    const colorBlendFactor = (backgroundSettings.sun.colors.sunset === backgroundSettings.sun.colors.noon) ? dayFactor : (sunsetFactor > 0 ? sunsetFactor : dayFactor > 0 ? dayFactor : nightFactor);
+    const skyColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
+    ctx.fillStyle = skyColor;
+    ctx.fillRect(0, 0, w, h);
+    
+    // Draw parallax layers
+    for (const layerKey of ["hills", "mountains", "trees", "stars"]) {
+        const layer = backgroundSettings[layerKey];
+        if (!layer.enabled) continue;
+        
+        const layerColor = this.blendColors(layer.colors, colorBlendFactor);
+        ctx.fillStyle = layerColor;
+        
+        // Get opacity for this layer based on time of day
+        let opacity = timeSettings.timeOpacities.day[layerKey] ?? 0.5;
+        if (dayFactor >= 0.5) {
+        const t = (1 - dayFactor) / 0.5;
+        const nightOp = timeSettings.timeOpacities.night[layerKey] ?? 0.5;
+        opacity = timeSettings.timeOpacities.day[layerKey] + (nightOp - timeSettings.timeOpacities.day[layerKey]) * t;
+        }
+        ctx.globalAlpha = opacity;
+        
+        this.drawParallaxLayer(ctx, layerKey, layer.frequency, layer.panSpeed, w, h);
+    }
+    
+    ctx.globalAlpha = 1.0;
+  }
+
+  drawParallaxLayer(ctx, layerKey, frequency, panSpeed, w, h) {
+    const offset = (performance.now() * panSpeed * 0.001) % w;
+    
+    ctx.beginPath();
+    let y = h * 0.6;    
+    for (let x = -w; x < w * 2; x += 10) {
+        const noiseVal = noise2D((x + offset) * frequency, layerKey.charCodeAt(0));
+        const waveY = y + noiseVal * 20;
+        
+        if (x === -w) ctx.moveTo(x, waveY);
+        else ctx.lineTo(x, waveY);
+    }
+    ctx.lineTo(w * 2, h);
+    ctx.lineTo(-w, h);
+    ctx.closePath();
+    ctx.fill();
+  }
+  blendColors(colors, factor) {
+    const day = hexToRgb(colors.noon);
+    const night = hexToRgb(colors.midnight);
+    const sunset = hexToRgb(colors.sunset);
+    const r = clampByte(day.r * factor + night.r * (1 - factor) + sunset.r * (1 - Math.abs(0.5 - factor) * 2));
+    const g = clampByte(day.g * factor + night.g * (1 - factor) + sunset.g * (1 - Math.abs(0.5 - factor) * 2));
+    const b = clampByte(day.b * factor + night.b * (1 - factor) + sunset.b * (1 - Math.abs(0.5 - factor) * 2));
+    return `rgb(${r},${g},${b})`;
   }
   drawWorldBlocks(world) {
     for (const ch of world.visibleChunks) {
@@ -452,7 +508,7 @@ class Drawer {
     const y = heart.wy - camera.y;
     ctx.save();
     ctx.translate(x, y);
-    ctx.scale(this.scale, this.scale);
+    ctx.scale(heart.scale, heart.scale);
     ctx.fillStyle = "pink";
     ctx.beginPath();
     ctx.moveTo(0, 0);
@@ -766,7 +822,7 @@ class Drawer {
         // head
         ctx.save();
         ctx.translate(tipX, tipY);
-        drawFlowerStamp2(ctx, f, { headR, centerR: Math.max(2, headR * 0.35) });
+        this.bouquetPreviewdrawFlowerStamp(ctx, f, { headR, centerR: Math.max(2, headR * 0.35) });
         ctx.restore();
     }
     ctx.restore();
@@ -781,7 +837,7 @@ class Drawer {
 
             const n = Math.min(player.bouquetPreview.maxStems, player.inventory.flowers.length);
             if (n > 0) {
-            drawBouquetGhost(
+            this.drawBouquetGhost(
                 ctx,
                 wx - player.camera.x,
                 wy - player.camera.y,
@@ -818,13 +874,21 @@ class Entity {
   }
 }
 class FloatingHeart extends Entity {
-    constructor(wx, wy, clickable = false, radius = 0) {
-    this.wx = wx;
-    this.wy = wy;
-    this.vx = 0;
-    this.vy = 0;
-    this.clickable = clickable;
-    this.radius = radius;
+    constructor(wx, wy, opts = {}) {
+    super(wx, wy, opts.clickable ?? true, opts.radius ?? 18);
+    this.vx = opts.vx ?? 0;
+    this.vy = opts.vy ?? -20;
+    this.life = opts.life ?? 2.0;
+    this.interaction = opts.interaction ?? "none";
+    this.radius = opts.radius ?? 18; 
+    this.dragStrength = opts.dragStrength ?? 14;
+    this.attractStrength = opts.attractStrength ?? 6;
+
+    this._held = false;
+    this._holdDx = 0;
+    this._holdDy = 0;
+    this.clickable = opts.clickable ?? true;
+    this.radius = opts.radius ?? 18;
     this.alive = true;
     this.z = 0;
     this.type = "floatingHeart";
@@ -1174,7 +1238,6 @@ class MessageBox extends Entity {
 
     this.visible = true;
     this.text = text;
-    this.text = "";
     this.typed = 0;
     this.timer = 0;
     this.speed = 60; // chars/sec
@@ -1217,7 +1280,54 @@ class MessageBox extends Entity {
     }
   }
 }
-class customSpawner{
+class FlowerParticle extends Entity {
+  constructor(wx, wy, opts = {}) {
+    super(wx, wy, false, 0);
+    this.size = opts.size ?? 6;
+
+    this.vx = opts.vx ?? 0;
+    this.vy = opts.vy ?? -200;
+    this.life = opts.life ?? 1.2;
+    this.rot = opts.rot ?? 0;
+    this.vrot = opts.vrot ?? (Math.random() - 0.5) * 8;
+    this.size = opts.size ?? 6;
+    this.color = opts.color ?? "pink";
+    this.drag = opts.drag ?? 0.9;
+    this.gravity = opts.gravity ?? 520;
+    this.shape = opts.shape ?? "circle";
+  }
+  update(dt) {
+    this.life -= dt;
+    if (this.life <= 0) { this.alive = false; return; }
+    this.vy += this.gravity * dt;
+    this.wx += this.vx * dt;
+    this.wy += this.vy * dt;
+    const damp = Math.pow(this.drag, dt * 60);
+    this.vx *= damp;
+    this.vy *= damp;
+    this.rot += this.vrot * dt;
+  }
+}
+class BouquetEntity extends Entity {
+  constructor(tx, ty, flowers) {
+    const wx = tx * blockSize + blockSize / 2;
+    const wy = ty * blockSize + blockSize / 2;
+    super(wx, wy, false, 0);
+    this.tx = tx; this.ty = ty;
+    this.flowers = flowers;
+    this.isbeingheld = false;
+    this.z = 6;
+  }
+  initAsHeld() {
+    this.isbeingheld = true;
+    this.clickable = false;
+  }
+  changeToGrounded() {
+    this.isbeingheld = false;
+    this.clickable = true;
+  }
+}
+class CustomSpawner{
     constructor(scene, definition){
         this.scene = scene;
         this.def = definition;
@@ -1253,61 +1363,91 @@ class customSpawner{
 class Scene {
   constructor() {
     this.world = new World();
-    this.clickables = new Set();
     this.entities = new Set();
-    this.MSG = new MessageBox();
-    this.spawners = [];
-    this.messageQueue = []
-  }
-  onEnter(sm, player) {
-    player.sm = sm;
-    this.drawWorld(player.drawer);
-    this.clickables.clear();
-    for (const e of this.entities) e.addToClickable?.(this);
-  }
-  startMessages() {
-    let i = 0;
-    MSG.show(messageQueue[i], { speed: 85 });
+    this.clickables = new Set();
 
-    return () => {
-        if (!MSG.done) { MSG.advance(); return; }
-        i++;
-        if (i < messageQueue.length) MSG.show(messageQueue[i], { speed: 85 });
-    };
+    this.MSG = new MessageBox(0,0,"");
+    this.messageQueue = []
+    this._messageIndex = 0;
+    this.spawners = [];
   }
-  shouldAdvanceStory() { //imported from old code
-    if (!advanceStory) return false;
-    if (mouse.clicked) return true;
-    if (Input.wasPressed(" ")) return true;
-    return !!advanceStory && MSG?.visible;
+  onEnter(sm, player, payload ={}) {
+    this.world.updateVisible(player.camera, (ent) => this.entities.add(ent));
+    this.rebuildClickables(player);
+    if (payload.messages?.length){
+        this.startMessages(payload.messages);
+    }
   }
-  getBlockAt(wx, wy) { return this.world.getBlockAt(wx, wy); }
-  placeBlockAt(wx, wy, type) { this.world.setBlockAt(wx, wy, type); }
-  removeBlockAt(wx, wy) { this.world.removeBlockAt(wx, wy); }
-  addEntity(ent) { this.entities.add(ent); }
-  playerClickToAction(player) {
+  onExit(sm, payload ={}){
+    //optional
+  }
+  rebuildClickables(){
+    this.clickables.clear();
+    for (const ent of this.entities) {
+      if (ent.clickable) this.clickables.add(ent);
+    }
+  }
+  handleClick(player) {
     const { wx, wy } = player.mouseWorld();
     for (const ent of this.clickables) {
       if (ent.hitTest(wx, wy)) { ent.interaction?.(this, player); break; }
     }
   }
-  update(dt) {
-    this.drawWorld(player.drawer);
-    this.playerClickToAction(player);
-    for (const e of this.entities) e.update(dt, this);
-    for (const s of this.spawners) s.update?.(dt);
-    this.entities = new Set([...this.entities].filter(e => e.alive));
+  startMessages() {
+    this.messageQueue = messages.slice(); // copy
+    this._messageIndex = 0;
+    this.MSG.show(this.messageQueue[this._messageIndex], {speed: 40});
+  }
+  advanceMessage({hideOnDone = false} = {}) {
+    if (!this.MSG.visible) return;
+    if (!this.MSG.done) {
+      this.MSG.advance({ hideOnDone });
+      return;
+    }
+    this._messageIndex++;
+    if (this._messageIndex < this.messageQueue.length) {
+      this.MSG.show(this.messageQueue[this._messageIndex], {speed: 40});
+    } else {
+      this.MSG.visible = false;
+    }
+  }
+  getBlockAt(wx, wy) { return this.world.getBlockAt(wx, wy); }
+  placeBlockAt(wx, wy, type) { this.world.setBlockAt(wx, wy, type); }
+  removeBlockAt(wx, wy) { this.world.removeBlockAt(wx, wy); }
+  addEntity(ent) { this.entities.add(ent); }
+  update(sm, dt) {
+    const player = sm.player;
+    this.world.updateVisible(player.camera, (ent) => this.entities.add(ent));
+    this.MSG.update(dt);
+    for (const ent of this.entities) {
+      ent.update?.(dt, this.world);
+    }
+    for (const spawner of this.spawners) {
+        spawner.update(dt);
+    }
+    for (const ent of this.entities) if (!ent.alive) this.entities.delete(ent);
+    if(!player.mouse.clicked){
+        if (this.MSG.visible && this.MSG.done) {
+            this.advanceMessage();
+        } else {
+            this.handleClick(player);
+        }
+    }
+    if (player.wasPressed(" " && this.MSG.visible && this.MSG.done)) {
+        this.advanceMessage({ hideOnDone: true });
+    }
   }
   periodicUpdate(dt) {
-    // for things that don't need to update every frame, like sorting entities by z ordering
-    this.entities = new Set([...this.entities].filter(e => e.alive));
-    this.entities = new Set([...this.entities].sort((a, b) => (a.z - b.z) || (a.wy - b.wy)));
+    this.rebuildClickables();
   }
-  drawWorld(drawer) {
-    this.world.updateVisible(player.camera, (ent) => this.entities.add(ent));
-    drawer.drawBackground();
-    drawer.drawWorldBlocks(this.world);
-    drawer.drawEntities(this.entities);
+  draw(sm, ctx, now) {
+    const player = sm.player;
+    const drawer = sm.drawer;
+    drawer.drawBackground(now);
+    drawer.drawWorldBlocks(ctx, player.camera, this.world);
+    drawer.drawEntities(ctx, player.camera, this.entities);
+    drawer.drawHUD(player);
+    drawer.drawMessageBox(ctx, this.MSG);
   }
   drawOverlay(sm, ctx) {
     ctx.save();
@@ -1318,3 +1458,28 @@ class Scene {
     ctx.restore();
   }
 }
+
+let lastTime = 0;
+let now = 0;
+const player = new Player();
+const scenes = {
+  scene: new Scene(),
+};
+const SM = new SceneManager(
+  { scene: scenes.scene },
+  "scene",
+  player
+);
+
+function loop(now){
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    SM.update(dt);
+    // SM.draw(ctx, now);
+    SM.drawOverlay(ctx);
+
+    requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
