@@ -285,7 +285,7 @@ class Player {
       blocks: new Map()
     };
     this.bouquetPreview = {
-      enabled: false,
+      enabled: true,
       maxStems: 8,
       lastTile: null,
     };
@@ -1414,7 +1414,7 @@ class Scene {
         spawner.update(dt);
     }
     for (const ent of this.entities) if (!ent.alive) this.entities.delete(ent);
-    if(!player.mouse.clicked){
+    if(player.mouse.clicked){
         if (this.MSG.visible && this.MSG.done) {
             this.handleClick(player);
         } else {
@@ -1458,6 +1458,7 @@ const SM = new SceneManager(
   "scene",
   player
 );
+player.sm = SM;
 
 function loop(now){
     const dt = (now - lastTime) / 1000;
@@ -1467,7 +1468,7 @@ function loop(now){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     SM.update(dt);
     SM.draw(SM, dt);
-    player.clicked = false; // reset click state after handling
+    player.clicked = false;
     requestAnimationFrame(loop);
 }
 
