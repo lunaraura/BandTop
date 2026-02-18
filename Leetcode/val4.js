@@ -4,15 +4,26 @@ const ctx = canvas.getContext("2d");
 const blockSize = 10;
 const chunkSize = 16;
 const backgroundSettings = {
-  hills: { enabled: true, frequency: 0.03, colors: {midnight: "#1b6952", noon: "#87ceeb", sunset: "#ff4500"}, hillAmplitudes: [200, 100, 50], panSpeed: 0.02 },
-  stars: { enabled: true, frequency: 0.002, colors: {midnight: "#ffffff", noon: "#aaf2ff", sunset: "#ff4500"}, panSpeed: 0.01 },
-  trees: { enabled: true, frequency: 0.005, colors: {midnight: "#2e8b57", noon: "#66cdaa", sunset: "#ff4500"}, panSpeed: 0.03 },
-  mountains: { enabled: true, frequency: 0.01, colors: {midnight: "#302011", noon: "#a0522d", sunset: "#ff4500"}, panSpeed: 0.015 },
-  sun: { enabled: true, colors: {midnight: "#000000", noon: "#ffff00", sunset: "#ff4500"}, panSpeed: 0.05 },
+  hills: { enabled: true, frequency: 0.03, 
+    colors: {midnight: "#144234", noon: "#2aa165", sunset: "#7f8d46"},
+    hillAmplitudes: [500, 100, 50], panSpeed: 0.02, baseHeight: 0.6 },
+  stars: { enabled: true, frequency: 400,
+    colors:{midnight: "#ffffff", noon: "#aaf2ff", sunset: "#ff4500"}, panSpeed: 0.01 },
+  trees: { enabled: true, frequency: 0.005,
+    colors: {midnight: "#2e8b57", noon: "#66cdaa", sunset: "#ff4500"}, panSpeed: 0.03, baseHeight: 0.4 },
+  mountains: { enabled: true, frequency: 0.01,
+    colors: {midnight: "#302011", noon: "#a0522d", sunset: "#ff4500"}, panSpeed: 0.015, baseHeight: 0.5 },
+  sun: { enabled: true, colors:
+    {midnight: "#000000", noon: "#ffff1d", sunset: "#c54719"}, panSpeed: 0.05 },
+  sky: { enabled: true, colors: {
+        midnight: {top: "#001d3d", bottom: "#000000"},
+        noon: {top: "#87dceb", bottom: "#ffffff"},
+        sunset: {top: "#ff7e5f", bottom: "#feb47b"}
+    }},
 };
 const timeSettings = {
     dayColorTransition: 0.01, // how quickly the background transitions between day/night colors
-    dayNightCycleSpeed: 0.001, // how quickly time progresses (affects sun position and color)
+    dayNightCycleSpeed: 0.00001, // how quickly time progresses (affects sun position and color)
     sunSize: 50, // radius of the sun
     sunPathHeight: 150, // how high the sun arcs in the sky
     timeOpacities: {
@@ -100,14 +111,14 @@ class SceneManager {
     this.scene = null;
     this.t = 0;
     this.state = {};
-    this._events = [];    this.entities = new Set();
+    this._events = [];
     this.clickables = new Set();
-    this.spawners = [];
+    this.entities = new Set();
     this.player = player;
     this.set(startId);
     this.drawer = new Drawer(player.camera, canvas, this);
   }
-    set(id, payload = {}) {
+  set(id, payload = {}) {
     if (this.scene?.onExit) this.scene.onExit(this, payload);
     this.id = id;
     this.scene = this.defs[id];
@@ -132,8 +143,8 @@ class SceneManager {
     }
     if (this.scene?.update) this.scene.update(this, dt);
   }
-  draw(sm, dt) {
-    if (this.scene?.draw) this.scene.draw(this, sm.drawer, dt);
+  draw(now) {
+    if (this.scene?.draw) this.scene.draw(this, now);
   }
   reloadClickables() {
     this.clickables.clear();
@@ -402,10 +413,36 @@ class Drawer {
     const dayFactor = Math.max(0, Math.cos(time * Math.PI * 2));
     const sunsetFactor = 1 - Math.abs(dayFactor);
     const nightFactor = 1 - dayFactor;
-    const colorBlendFactor = (backgroundSettings.sun.colors.sunset === backgroundSettings.sun.colors.noon) ? dayFactor : (sunsetFactor > 0 ? sunsetFactor : dayFactor > 0 ? dayFactor : nightFactor);
-    const skyColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
+    const topSkyColor = this.blendColors({
+        midnight: backgroundSettings.sky.colors.midnight.top,
+        noon: backgroundSettings.sky.colors.noon.top,
+        sunset: backgroundSettings.sky.colors.sunset.top
+    }, dayFactor);
+    const bottomSkyColor = this.blendColors({
+        midnight: backgroundSettings.sky.colors.midnight.bottom,
+        noon: backgroundSettings.sky.colors.noon.bottom,
+        sunset: backgroundSettings.sky.colors.sunset.bottom
+    }, dayFactor);
+    const colorBlendFactor = dayFactor;
+    const skyColor = `linear-gradient(${topSkyColor}, ${bottomSkyColor})`;
     ctx.fillStyle = skyColor;
     ctx.fillRect(0, 0, w, h);
+
+    if (backgroundSettings.stars.enabled) {        
+        const pan = (time * backgroundSettings.stars.panSpeed * 0.001) % 1;
+        const alphaBase = timeSettings.timeOpacities.day.stars ?? 0.5;
+        ctx.fillStyle = this.blendColors(backgroundSettings.stars.colors, colorBlendFactor);
+        // ctx.globalAlpha = alphaBase * ((dayFactor >= 0.5) ? (1 - dayFactor) / 0.5 : 1);
+        for (let i=0; i < backgroundSettings.stars.frequency; i++) {
+            const winkle = 0.5 + 1.5 * Math.sin(time * Math.random() * 10);
+            const starX = (noise1D(i * 0.1, 2555) + 1) * 0.5 * w + pan * w;
+            const starY = (noise1D(i * 0.1, 2556) + 1) * 0.5 * h + pan * h;
+            const starSize = Math.max(0.5, noise1D(i * 0.1, 5557) * 1.5  * winkle);
+            ctx.beginPath();
+            ctx.arc(starX, starY, starSize, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
     for (const layerKey of ["hills", "mountains", "trees", "stars"]) {
         const layer = backgroundSettings[layerKey];
         if (!layer.enabled) continue;
@@ -423,10 +460,19 @@ class Drawer {
         this.drawParallaxLayer(layerKey, layer.frequency, layer.panSpeed, w, h);
     }
     ctx.globalAlpha = 1.0;
+    if (backgroundSettings.sun.enabled) {
+        const sunColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
+        ctx.fillStyle = sunColor;
+        const sunX = w * time;
+        const sunY = h * 0.5 - Math.sin(time * Math.PI * 2) * timeSettings.sunPathHeight;
+        ctx.beginPath();
+        ctx.arc(sunX, sunY, timeSettings.sunSize, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
   }
   drawParallaxLayer(layerKey, frequency, panSpeed, w, h) {
-    const offset = (performance.now() * panSpeed * 0.001) % w;
-    
+    const offset = ( panSpeed * 0.01) % w;
     ctx.beginPath();
     let y = h * 0.6;    
     for (let x = -w; x < w * 2; x += 10) {
@@ -910,16 +956,16 @@ class HeartEntity extends Entity {
             this.clickable = true;
         }
     }
-    update(dt, world) {
+    update(dt, scene) {
         this.life -= dt;
         if (this.life <= 0) { this.alive = false; return; }
         this.vy += 140 * dt;
         this.wx += this.vx * dt;
         this.wy += this.vy * dt;
-        this.hitsGround(world);
+        this.hitsGround(scene);
     }
-    hitsGround(world) {
-        const below = world.getBlockAt(this.wx, this.wy + blockSize);
+    hitsGround(scene) {
+        const below = scene.getBlockAt(this.wx, this.wy + blockSize);
         if (below) this.life = 0;
     }
 }
@@ -1333,7 +1379,7 @@ class CustomSpawner{
             this.scene.entities.add(ent);
         }
     }
-    update(dt){
+    update(dt, sm){
         if (!this.needed) return;
         switch(this.def.type){
             case "heartBurst": {
@@ -1411,19 +1457,17 @@ class Scene {
       ent.update?.(dt, this);
     }
     for (const spawner of this.spawners) {
-        spawner.update(dt);
+        spawner.update(dt, this);
     }
     for (const ent of this.entities) if (!ent.alive) this.entities.delete(ent);
-    if(player.mouse.clicked){
-        if (this.MSG.visible && this.MSG.done) {
-            this.handleClick(player);
-        } else {
-            this.advanceMessage();
-        }
-    }
     if (player.wasPressed(" ") && this.MSG.visible) {
         this.advanceMessage({ hideOnDone: true });
     }
+    if(player.mouse.clicked){
+        if (this.MSG.visible) this.advanceMessage({hideOnDone:true});
+        else this.handleClick(player);
+    }
+    this.rebuildClickables();
   }
   periodicUpdate(dt) {
     this.rebuildClickables();
@@ -1463,12 +1507,11 @@ player.sm = SM;
 function loop(now){
     const dt = (now - lastTime) / 1000;
     lastTime = now;
-    player.beginFrame();
     player.update(dt);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     SM.update(dt);
-    SM.draw(SM, dt);
-    player.clicked = false;
+    SM.draw(now);
+    player.beginFrame();
     requestAnimationFrame(loop);
 }
 
