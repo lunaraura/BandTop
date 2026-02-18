@@ -4,25 +4,25 @@ const ctx = canvas.getContext("2d");
 const blockSize = 10;
 const chunkSize = 16;
 const backgroundSettings = {
-  hills: { enabled: true, frequency: 0.03, 
+  hills: { enabled: true, frequency: 0.01, 
     colors: {midnight: "#144234", noon: "#2aa165", sunset: "#7f8d46"},
-    hillAmplitudes: [500, 100, 50], panSpeed: 0.02, baseHeight: 0.6 },
+    hillAmplitudes: [200, 100, 50], panSpeed: 0.02, baseHeight: 0.8 },
   stars: { enabled: true, frequency: 400,
     colors:{midnight: "#ffffff", noon: "#aaf2ff", sunset: "#ff4500"}, panSpeed: 0.01 },
   trees: { enabled: true, frequency: 0.005,
-    colors: {midnight: "#2e8b57", noon: "#66cdaa", sunset: "#ff4500"}, panSpeed: 0.03, baseHeight: 0.4 },
+    colors: {midnight: "#2e8b57", noon: "#66cdaa", sunset: "#ff4500"}, panSpeed: 0.03, baseHeight: 1.1 },
   mountains: { enabled: true, frequency: 0.01,
-    colors: {midnight: "#302011", noon: "#a0522d", sunset: "#ff4500"}, panSpeed: 0.015, baseHeight: 0.5 },
+    colors: {midnight: "#302011", noon: "#a0522d", sunset: "#ff4500"}, panSpeed: 0.015, baseHeight: 0.6 },
   sun: { enabled: true, colors:
     {midnight: "#000000", noon: "#ffff1d", sunset: "#c54719"}, panSpeed: 0.05 },
   sky: { enabled: true, colors: {
         midnight: {top: "#001d3d", bottom: "#000000"},
         noon: {top: "#87dceb", bottom: "#ffffff"},
-        sunset: {top: "#ff7e5f", bottom: "#feb47b"}
+        sunset: {top: "#ee9ef2", bottom: "#d36e20"}
     }},
 };
 const timeSettings = {
-    dayColorTransition: 0.01, // how quickly the background transitions between day/night colors
+    dayColorTransition: 0.1, // how quickly the background transitions between day/night colors
     dayNightCycleSpeed: 0.00001, // how quickly time progresses (affects sun position and color)
     sunSize: 50, // radius of the sun
     sunPathHeight: 150, // how high the sun arcs in the sky
@@ -302,6 +302,7 @@ class Player {
     };
     this.tools = new Toolbelt(this);
     this.holding = [];
+    this.heldBouquet = null;
   }
   _bindEvents() {
     const c = canvas;
@@ -346,11 +347,15 @@ class Player {
     if (this.wasPressed("v") && this.sm?.scene) {
       this.tryPlaceBouquet(this.sm.scene);
     }
+    if (this.wasPressed("1")) this.tools.toolIndex = 0;
+    if (this.wasPressed("2")) this.tools.toolIndex = 1;
+    if (this.wasPressed("3")) this.tools.toolIndex = 2;
+    if (this.wasPressed("4")) this.tools.toolIndex = 3;
     if (this.isDown("ArrowLeft") || this.isDown("a")) dx -= 1;
     if (this.isDown("ArrowRight") || this.isDown("d")) dx += 1;
     if (this.isDown("ArrowUp") || this.isDown("w")) dy -= 1;
     if (this.isDown("ArrowDown") || this.isDown("s")) dy += 1;
-    if (dx || dy) { this.camera.x += dx * speed * dt; this.camera.y += dy * speed * dt; }    if (this.mouse.clicked && this.sm?.scene) this.tools.useCurrentTool(this.sm.scene);
+    if (dx || dy) { this.camera.x += dx * speed * dt; this.camera.y += dy * speed * dt; }
   }
   tryPlaceBouquet(scene) {
     const mw = this.mouseWorld();
@@ -359,6 +364,13 @@ class Player {
     if (this.inventory.flowers.length <= 0) return;
     if (scene.getBlockAt(mw.wx, mw.wy)) return;
     //get data from flowers to bouquet
+    const take = Math.min(this.bouquetPreview.maxStems, this.inventory.flowers.length);
+    const flowers = this.inventory.flowers.splice(0, take);
+    const b = new BouquetEntity(tx, ty, flowers);
+    b.changeToGrounded();
+    scene.entities.add(b);
+    if (this.heldBouquet) { scene.entities.delete(this.heldBouquet); this.heldBouquet = null; }
+  
   }
 }
 class Toolbelt {
@@ -409,10 +421,8 @@ class Drawer {
   worldToScreen(wx, wy) { return { sx: wx - this.camera.x, sy: wy - this.camera.y }; }
   drawBackground(now) {
     const w = this.canvas.width, h = this.canvas.height;
-    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
-    const dayFactor = Math.max(0, Math.cos(time * Math.PI * 2));
-    const sunsetFactor = 1 - Math.abs(dayFactor);
-    const nightFactor = 1 - dayFactor;
+    const time = (now * timeSettings.dayNightCycleSpeed) % 2;
+    const dayFactor = 0.5 + 0.5 * Math.cos(time * Math.PI * 2);
     const topSkyColor = this.blendColors({
         midnight: backgroundSettings.sky.colors.midnight.top,
         noon: backgroundSettings.sky.colors.noon.top,
@@ -423,13 +433,28 @@ class Drawer {
         noon: backgroundSettings.sky.colors.noon.bottom,
         sunset: backgroundSettings.sky.colors.sunset.bottom
     }, dayFactor);
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, topSkyColor);
+    grad.addColorStop(1, bottomSkyColor);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);    
     const colorBlendFactor = dayFactor;
-    const skyColor = `linear-gradient(${topSkyColor}, ${bottomSkyColor})`;
-    ctx.fillStyle = skyColor;
-    ctx.fillRect(0, 0, w, h);
-
+    const sunTimePhase = time + 0.2
+    if (backgroundSettings.sun.enabled) {
+        const sunColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
+        ctx.fillStyle = sunColor;
+        const sunX = w * sunTimePhase;
+        const sunY = h * 0.5 - Math.sin(sunTimePhase * Math.PI * 2.2) * timeSettings.sunPathHeight;
+        const alphaBase = timeSettings.timeOpacities.day.sun ?? 1.0;
+        ctx.globalAlpha = alphaBase * ((dayFactor >= 0.5) ? (1 - dayFactor) / 0.5 : 1);
+        ctx.beginPath();
+        ctx.arc(sunX, sunY, timeSettings.sunSize, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1.0;
     if (backgroundSettings.stars.enabled) {        
-        const pan = (time * backgroundSettings.stars.panSpeed * 0.001) % 1;
+        const worldRotate = time * backgroundSettings.stars.panSpeed * 360;
+        const pan = (time * backgroundSettings.stars.panSpeed) % 1;
         const alphaBase = timeSettings.timeOpacities.day.stars ?? 0.5;
         ctx.fillStyle = this.blendColors(backgroundSettings.stars.colors, colorBlendFactor);
         // ctx.globalAlpha = alphaBase * ((dayFactor >= 0.5) ? (1 - dayFactor) / 0.5 : 1);
@@ -443,38 +468,35 @@ class Drawer {
             ctx.fill();
         }
     }
-    for (const layerKey of ["hills", "mountains", "trees", "stars"]) {
+    ctx.globalAlpha = 1.0;
+    ctx.filter = 'blur(4px)'
+    for (const layerKey of [ "mountains", "hills", "trees"]) {
         const layer = backgroundSettings[layerKey];
         if (!layer.enabled) continue;
         const layerColor = this.blendColors(layer.colors, colorBlendFactor);
-        ctx.fillStyle = layerColor;
-        
+        const newGrad = ctx.createLinearGradient(0,0,0,h)
+        newGrad.addColorStop(0, layerColor);
+        newGrad.addColorStop(1, 'white');
+        ctx.fillStyle = newGrad;
         let opacity = timeSettings.timeOpacities.day[layerKey] ?? 0.5;
         if (dayFactor >= 0.5) {
         const t = (1 - dayFactor) / 0.5;
         const nightOp = timeSettings.timeOpacities.night[layerKey] ?? 0.5;
         opacity = timeSettings.timeOpacities.day[layerKey] + (nightOp - timeSettings.timeOpacities.day[layerKey]) * t;
         }
+        const baseH = layer.baseHeight
         ctx.globalAlpha = opacity;
         
-        this.drawParallaxLayer(layerKey, layer.frequency, layer.panSpeed, w, h);
+        this.drawParallaxLayer(layerKey, layer.frequency, layer.panSpeed, w, h, baseH);
     }
-    ctx.globalAlpha = 1.0;
-    if (backgroundSettings.sun.enabled) {
-        const sunColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
-        ctx.fillStyle = sunColor;
-        const sunX = w * time;
-        const sunY = h * 0.5 - Math.sin(time * Math.PI * 2) * timeSettings.sunPathHeight;
-        ctx.beginPath();
-        ctx.arc(sunX, sunY, timeSettings.sunSize, 0, Math.PI * 2);
-        ctx.fill();
-    }
+    ctx.filter = 'none'
+
 
   }
-  drawParallaxLayer(layerKey, frequency, panSpeed, w, h) {
-    const offset = ( panSpeed * 0.01) % w;
+  drawParallaxLayer(layerKey, frequency, panSpeed, w, h, baseH) {
+    const offset = ( panSpeed * 0.1) % w;
     ctx.beginPath();
-    let y = h * 0.6;    
+    let y = h * 0.6 * baseH;    
     for (let x = -w; x < w * 2; x += 10) {
         const noiseVal = noise2D((x + offset) * frequency, layerKey.charCodeAt(0));
         const waveY = y + noiseVal * 20;
@@ -484,6 +506,7 @@ class Drawer {
     ctx.lineTo(w * 2, h);
     ctx.lineTo(-w, h);
     ctx.closePath();
+    
     ctx.fill();
   }
   blendColors(colors, factor) {
@@ -606,7 +629,6 @@ class Drawer {
     this.drawBouquetGhost(x, y, bouquet.flowers, { alpha: 1.0, maxStems: bouquet.flowers.length, fan: 0.9, stemLen: 34, headR: 7 });
   }
   drawBigFlower(camera, bigFlower) {
-    ctx.save();
     ctx.lineCap = "round";
     ctx.strokeStyle = "#2e8b57";
     const segCountTotal = Math.max(0, bigFlower.nodes.length - 1);
@@ -1033,9 +1055,18 @@ class FlowerEntity extends Entity {
   }
   interaction(scene, player) {
     if (player.tools.isCurrentTool("Hand")){
+        // update or create an in-world bouquet that follows the mouse (ghost)
+        if (player.bouquetPreview.enabled) {
+          if (player.heldBouquet) {
+            player.heldBouquet.flowers = player.inventory.flowers.slice();
+          } else {
+            const bouquet = new BouquetEntity(this.tx, this.ty, player.inventory.flowers.slice());
+            bouquet.initAsHeld();
+            player.heldBouquet = bouquet;
+            scene.entities.add(bouquet);
+          }
+        }
         //pick flower
-        player.inventory.flowers.push(this.exportDrawData());
-        player.invAdd(4, 1);
         scene.entities.delete(this);
     } else if (player.tools.isCurrentTool("HeartWand")){
       //multiple hearts spawn outwards
@@ -1246,7 +1277,6 @@ class BigFlower extends Entity {
     // HeartWand can also pop (and you can keep your heart burst if you want)
     if (player.tools.isCurrentTool("HeartWand")) {
       this.explode(scene);
-      // optional: keep heart burst from tip
       const tipIdx = this._currentTipNodeIndex();
       const tip = this.nodes[tipIdx] ?? { x: this.wx, y: this.wy };
       for (let i = 0; i < 8; i++) {
@@ -1326,9 +1356,10 @@ class FlowerParticle extends Entity {
     this.vrot = opts.vrot ?? (Math.random() - 0.5) * 8;
     this.size = opts.size ?? 6;
     this.color = opts.color ?? "pink";
-    this.drag = opts.drag ?? 0.9;
+    this.drag = opts.drag ?? 0.95;
     this.gravity = opts.gravity ?? 520;
     this.shape = opts.shape ?? "circle";
+    this.type = "flowerParticle"
   }
   update(dt) {
     this.life -= dt;
@@ -1359,6 +1390,13 @@ class BouquetEntity extends Entity {
   changeToGrounded() {
     this.isbeingheld = false;
     this.clickable = true;
+  }
+  update(dt, scene){
+    if (this.isbeingheld) {
+      const mw = SM.player.mouseWorld();
+      this.wx = Math.floor(mw.wx / blockSize) * blockSize + blockSize / 2;
+      this.wy = Math.floor(mw.wy / blockSize) * blockSize + blockSize / 2;
+    }
   }
 }
 class CustomSpawner{
@@ -1412,8 +1450,7 @@ class Scene {
         this.startMessages(payload.messages);
     }
   }
-  onExit(sm, payload ={}){
-    //optional
+  onExit(sm, payload ={}){//optional
   }
   rebuildClickables(){
     this.clickables.clear();
@@ -1504,6 +1541,7 @@ const SM = new SceneManager(
 );
 player.sm = SM;
 
+//synch
 function loop(now){
     const dt = (now - lastTime) / 1000;
     lastTime = now;
@@ -1514,5 +1552,25 @@ function loop(now){
     player.beginFrame();
     requestAnimationFrame(loop);
 }
+requestAnimationFrame(loop)
+// let logDone = false;
+// //asynch
+// function anim(now) {
+//     // ctx.clearRect(0, 0, canvas.width, canvas.height);
+//     if (!logDone) return;
+//     const dt = (now - lastTime) / 1000;
+//     lastTime = now;
+//     SM.draw(now);
+// }
+// function log(now){
+//     // logDone = false
+//     const dt = (now - lastTime) / 1000;
+//     lastTime = now;
+//     player.update(dt);
+//     SM.update(dt);
+//     player.beginFrame();
+//     // logDone = true;
+// }
 
-requestAnimationFrame(loop);
+// setInterval(anim(now), 50)
+// setInterval(log(now), 50)
