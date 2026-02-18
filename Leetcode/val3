@@ -13,7 +13,9 @@ const backgroundSettings = {
   trees: { enabled: true, frequency: 0.005, colors: {midnight: "#2e8b57", noon: "#66cdaa"}, panSpeed: 0.03 },
   mountains: { enabled: true, frequency: 0.01, colors: {midnight: "#302011", noon: "#a0522d"}, panSpeed: 0.015 }
 };
-
+const petalShapes = { triangle: [{x:0,y:-1},{x:-0.5,y:0.5},{x:0.5,y:0.5}], oval: { arc:{x:0,y:0}, radiusX:0.5, radiusY:1 } };
+const leafShapes = { oval: { arc:{x:0,y:0}, radiusX:0.5, radiusY:1 } };
+const flowerLimits = { petalCount:{min:3,max:8}, leafCount:{min:2,max:5}, stemHeight:{min:1,max:3} };
 const genedBlockDefinitions = {
   0: { name: "empty", color: "#000000", colorVariation: { r: 0, g: 0, b: 0 } },
   1: { name: "grass", color: "#00cc00", colorVariation: { r: 30, g: 30, b: 30 } },
@@ -151,8 +153,8 @@ class SceneManager {
 // ----------------- world/chunks -----------------
 class World {
   constructor() {
-    this.chunks = new Map();          // key -> Chunk
-    this.visibleChunks = [];          // array<Chunk>
+    this.chunks = new Map();
+    this.visibleChunks = []; 
   }
 
   key(cx, cy) { return `${cx},${cy}`; }
@@ -168,9 +170,7 @@ class World {
     const cy = Math.floor(wy / (chunkSize * blockSize));
     return { cx, cy };
   }
-
-  // keep a window of chunks around camera viewport
-  updateVisible(camera) {
+  updateVisible(camera, spawnEntity = null) {
     const minCX = Math.floor(camera.x / (chunkSize * blockSize)) - 1;
     const minCY = Math.floor(camera.y / (chunkSize * blockSize)) - 1;
     const maxCX = Math.floor((camera.x + canvas.width) / (chunkSize * blockSize)) + 1;
@@ -180,14 +180,15 @@ class World {
     for (let cy = minCY; cy <= maxCY; cy++) {
       for (let cx = minCX; cx <= maxCX; cx++) {
         const ch = this.getChunk(cx, cy);
-        if (!ch._decorated) { ch.decorate(); ch._decorated = true; }
+        if (!ch._decorated) {
+          ch.decorate(spawnEntity ?? (() => {}));
+          ch._decorated = true;
+        }
         visible.push(ch);
       }
     }
     this.visibleChunks = visible;
-
-    // optional offload: not needed for basics; keep it simple
-  }
+  };
 
   getBlockAt(wx, wy) {
     const { cx, cy } = this.worldToChunk(wx, wy);
@@ -207,47 +208,43 @@ class Chunk {
   constructor(cx, cy) {
     this.cx = cx;
     this.cy = cy;
-    this.blocks = new Map(); // "bx,by" -> {type}
+    this.blocks = new Map();
     this.floraViable = [];
     this._decorated = false;
     this.generateProcedural();
   }
-
-  // store blocks snapped to world-grid
   _key(wx, wy) {
     const bx = snapToBlock(wx) - this.cx * chunkSize * blockSize;
     const by = snapToBlock(wy) - this.cy * chunkSize * blockSize;
     return `${bx},${by}`;
   }
-
   getBlockAt(wx, wy) {
     const key = this._key(wx, wy);
     return this.blocks.get(key) ?? null;
   }
-
   setBlockAt(wx, wy, type) {
     const key = this._key(wx, wy);
     if (type == null || type === 0) this.blocks.delete(key);
     else this.blocks.set(key, { type });
   }
-
   generateProcedural() {
     const worldX0 = this.cx * chunkSize * blockSize;
     const worldY0 = this.cy * chunkSize * blockSize;
-
     const grassThicknessPx = 4 * blockSize;
     const dirtDepthPx = 12 * blockSize;
-    const start = Math.round(canvas.height/1.5)
-    for (let by = 0; by < chunkSize * blockSize; by += blockSize) {
-      for (let bx = 0; bx < chunkSize * blockSize; bx += blockSize) {
+    const start = Math.round(canvas.height / 1.5);
+    for (let bx = 0; bx < chunkSize * blockSize; bx += blockSize) {
+      let markedTop = false;
+      for (let by = 0; by < chunkSize * blockSize; by += blockSize) {
         const wx = worldX0 + bx;
         const wy = worldY0 + by;
-        const surface = start + noise2D(wx * 0.0025, 0.5) * 15;
-        const top = surface;
-
+        const top = start + noise2D(wx * 0.0025, 0.5) * 15;
         if (wy >= top && wy < top + grassThicknessPx) {
           this.setBlockAt(wx, wy, 1);
-          if (wy === Math.floor(top / blockSize) * blockSize) this.floraViable.push({ wx, wy });
+          if (!markedTop) {
+            markedTop = true;
+            this.floraViable.push({ wx, wy });
+          }
         } else if (wy >= top + grassThicknessPx && wy < top + grassThicknessPx + dirtDepthPx) {
           this.setBlockAt(wx, wy, 2);
         } else if (wy >= top + grassThicknessPx + dirtDepthPx) {
@@ -256,11 +253,41 @@ class Chunk {
       }
     }
   }
-  decorate() {
+  decorate(spawnEntity) {
+    for (const p of this.floraViable) {
+      const tx = Math.floor(p.wx / blockSize);
+      const ty = Math.floor(p.wy / blockSize);
+
+      const h = hash2i(tx, ty, 7777);
+      if ((h % 6) === 0) {
+        spawnEntity(new FlowerEntity(tx, ty));
+      }
+      if ((h % 20) === 0) {
+        this._placeTreeAt(p.wx, p.wy);
+      }
+      if ((h % 10) === 0) {
+        spawnEntity(new BigFlower(p.wx + blockSize / 2, p.wy + blockSize / 2, h));
+      }
+    }
+  }
+  _placeTreeAt(wx, wy) {
+    const hh = hash2i((wx / blockSize) | 0, (wy / blockSize) | 0, 2222);
+    const height = 16 + (hh % 4);
+    for (let i = 1; i <= height; i++) {
+      this.setBlockAt(wx, wy - i * blockSize, 4); 
+    }
+    const topY = wy - height * blockSize;
+    for (let dx = -5; dx <= 5; dx++) {
+      for (let dy = -4; dy <= 4; dy++) {
+        const man = Math.abs(dx) + Math.abs(dy);
+        if (man > 6) continue;  
+        if (dx === 0 && dy === 0) continue;
+        this.setBlockAt(wx + dx * blockSize, topY + dy * blockSize, 5); // leaves type=5
+      }
+    }
   }
 }
 
-// ----------------- entities -----------------
 class Entity {
   constructor(wx, wy, clickable = false, radius = 0) {
     this.wx = wx;
@@ -278,7 +305,7 @@ class Entity {
     const dx = wx - this.wx, dy = wy - this.wy;
     return (dx * dx + dy * dy) <= (this.radius * this.radius);
   }
-  interaction(scene, player) {} //for subclasses to override
+  interaction(scene, player) {} //for subclass override
   draw(ctx, camera) {
     const sx = this.wx - camera.x;
     const sy = this.wy - camera.y;
@@ -360,18 +387,17 @@ class HeartEntity extends Entity {
         this.clickable = true;
     }
   }
-  update(dt) {
+  update(dt, world) {
     this.life -= dt;
     if (this.life <= 0) { this.alive = false; return; }
     this.vy += 140 * dt;
     this.wx += this.vx * dt;
     this.wy += this.vy * dt;
-    this.hitsGround(300);
+    this.hitsGround(world);
   }
-  hitsGround(groundY) {
-    if (this.wy >= groundY) {
-        this.life = 0;
-    }
+  hitsGround(world) {
+    const below = world.getBlockAt(this.wx, this.wy + blockSize);
+    if (below) this.life = 0;
   }
   draw(ctx, camera) {
     const x = this.wx - camera.x;
@@ -485,6 +511,7 @@ class FlowerEntity extends Entity {
   interaction(scene, player) {
     if (player.tools.isCurrentTool("Hand")){
         //pick flower
+        player.inventory.flowers.push(this.exportDrawData());
         player.invAdd(4, 1);
         scene.entities.delete(this);
     } else if (player.tools.isCurrentTool("HeartWand")){
@@ -497,9 +524,11 @@ class FlowerEntity extends Entity {
             const extraHeart = new FloatingHeart(this.wx, this.wy, { vx, vy, life: 2.8 + Math.random() * 1.2 })
             heart.vx = vx;
             heart.vy = vy;
-            extraHeart.vx = -vx;
+            extraHeart.vx = vx;
             extraHeart.vy = -vy;
             scene.entities.add(heart);
+            scene.entities.add(extraHeart);
+
         }
     }
   }
@@ -508,7 +537,6 @@ class FlowerEntity extends Entity {
     return keys[Math.floor(this.rand() * keys.length)];
   }
 }
-
 class BigFlower extends Entity {
   constructor(wx, wy, seed = 91234) {
     super(wx, wy, true, 20);
@@ -516,25 +544,23 @@ class BigFlower extends Entity {
     this.seed = seed >>> 0;
     
     this.nodes = [];
-    this.attachments = [];
+    this.attachments = []; 
 
     this.grow = 0;
     this.growRate = 0.35;
     this.delay = 0;
 
-    // explode state
-    this.mode = "growing";      // "growing" | "blossom" | "exploding"
-    this.explodeT = 0;          // seconds since explosion
-    this.explodeDur = 0.9;      // stems retract over this time
+    this.mode = "growing";
+    this.explodeT = 0;
+    this.explodeDur = 0.9;
     this.noAttachAfterExplode = true;
 
-    // tuning
-    this.maxDepth = 2;
-    this.maxSegmentsPerBranch = 5;
-    this.baseLen = 3;
-    this.lenJitter = 0.25;
-    this.branchProb = 0.35;
-    this.branchSpread = Math.PI * 0.35;
+    this.maxDepth = 3;
+    this.maxSegmentsPerBranch = 10;
+    this.baseLen = 4;
+    this.lenJitter = 0.65;
+    this.branchProb = 0.2;
+    this.branchSpread = Math.PI * 0.2;
     this.trunkUpAngle = -Math.PI / 2;
 
     this.generate();
@@ -627,43 +653,108 @@ class BigFlower extends Entity {
     const segsToDraw = Math.min(segCountTotal, Math.floor(this.grow * segCountTotal));
     return Math.max(0, segsToDraw);
   }
-  update(dt) {
+  update(dt, scene) {
     if (this.delay > 0) { this.delay -= dt; return; }
-    if (this.grow >= 1 && this.mode === "growing") {
-      this.mode = "blossom";
-    }
+
+    // growth / state
     if (this.mode === "growing") {
       this.grow = Math.min(1, this.grow + this.growRate * dt);
+
+      // transition to blossom exactly once
+      if (this.grow >= 1) {
+        this.mode = "blossom";
+      }
     } else if (this.mode === "exploding") {
       this.explodeT += dt;
-      if (this.explodeT >= this.explodeDur) {
-        this.alive = false;
+      if (this.explodeT >= this.explodeDur) this.alive = false;
+    }
+  }
+  hitTest(wx, wy) {
+    const tipIdx = this._currentTipNodeIndex();
+    const tip = this.nodes[tipIdx] ?? this.nodes[0] ?? { x: this.wx, y: this.wy };
+    const dx = wx - tip.x;
+    const dy = wy - tip.y;
+    const r = 38; // world px
+    return (dx*dx + dy*dy) <= r*r;
+  }
+
+  explode(scene) {
+    if (this.mode === "exploding") return; // only block repeated pops
+    this.mode = "exploding";
+    this.explodeT = 0;
+
+    const tipIdx = this._currentTipNodeIndex();
+
+    // burst from attachments that are already grown
+    for (const a of this.attachments) {
+      if (a.node > tipIdx) continue;
+      const n = this.nodes[a.node];
+      if (!n) continue;
+
+      const count =
+        a.kind === "petals" ? 10 :
+        a.kind === "leaf"   ? 2  :
+        a.kind === "bud"    ? 4  : 1;
+
+      for (let i = 0; i < count; i++) {
+        const spread = (Math.random() - 0.5) * 260;
+        const up = -260 - Math.random() * 220;
+
+        scene.entities.add(new FlowerParticle(n.x, n.y, {
+          vx: spread,
+          vy: up,
+          life: 0.8 + Math.random() * 0.9,
+          size: (a.size ?? 14) * (0.35 + Math.random() * 0.35),
+          color: a.color ?? "pink",
+          shape: (a.kind === "leaf") ? "leaf" : "circle",
+          gravity: 480,
+          drag: 0.99,
+        }));
+      }
+    }
+
+    // extra ring burst from the tip
+    const tip = this.nodes[tipIdx] ?? this.nodes[0] ?? { x: this.wx, y: this.wy };
+    for (let i = 0; i < 18; i++) {
+      const ang = (Math.PI * 2 * i) / 18;
+      scene.entities.add(new FlowerParticle(tip.x, tip.y, {
+        vx: Math.cos(ang) * (120 + Math.random() * 160),
+        vy: -180 + Math.sin(ang) * (80 + Math.random() * 120),
+        life: 0.7 + Math.random() * 0.6,
+        size: 6 + Math.random() * 8,
+        color: "rgba(255,160,200,1)",
+        gravity: 720,
+        drag: 0.86
+      }));
+    }
+  }
+
+  interaction(scene, player) {
+    if (player.tools.isCurrentTool("Hand")) {
+      if (this.mode === "growing" && this.grow < 1) return; 
+      this.explode(scene);
+      return;
+    }
+
+    // HeartWand can also pop (and you can keep your heart burst if you want)
+    if (player.tools.isCurrentTool("HeartWand")) {
+      this.explode(scene);
+
+      // optional: keep heart burst from tip
+      const tipIdx = this._currentTipNodeIndex();
+      const tip = this.nodes[tipIdx] ?? { x: this.wx, y: this.wy };
+      for (let i = 0; i < 8; i++) {
+        const angle = (Math.PI * 2 * i) / 8;
+        const vx = Math.cos(angle) * 80;
+        const vy = Math.sin(angle) * 80;
+        const heart = new HeartEntity(tip.x, tip.y);
+        heart.vx = vx;
+        heart.vy = vy;
+        scene.entities.add(heart);
       }
     }
   }
-  interaction(scene, player) {
-    if (player.tools.isCurrentTool("Hand") && this.mode === "growing") return; //cant explode while growing
-    if (player.tools.isCurrentTool("Hand") && this.mode === "blossom") { //can explode when fully bloomed
-        this.mode = "exploding";
-        this.explodeT = 0;
-        return;
-    }
-    if (player.tools.isCurrentTool("HeartWand") && this.mode !== "exploding") {
-        this.mode = "exploding";
-        this.explodeT = 0;
-        const tipIdx = this._currentTipNodeIndex();
-        for (let i = 0; i < 8; i++) {
-            const angle = (Math.PI * 2 * i) / 8;
-            const vx = Math.cos(angle) * 80;
-            const vy = Math.sin(angle) * 80;
-            const heart = new HeartEntity(this.nodes[tipIdx].x, this.nodes[tipIdx].y);
-            
-            heart.vx = vx;
-            heart.vy = vy;
-            scene.entities.add(heart);
-        }
-    }
-  }
+
   draw(ctx, camera) {
     ctx.save();
     ctx.lineCap = "round";
@@ -694,8 +785,11 @@ class BigFlower extends Entity {
     }
 
     // attachments only when not exploding
-    if (this.mode === "growing") {
-      const aT = Math.max(0, (this.grow - 0.6) / 0.4);
+    if (this.mode !== "exploding") {
+      const aT = (this.mode === "blossom")
+        ? 1
+        : Math.max(0, (this.grow - 0.6) / 0.4);
+
       if (aT > 0) {
         ctx.globalAlpha = aT;
 
@@ -734,18 +828,17 @@ class BigFlower extends Entity {
             }
           }
         }
-
         ctx.globalAlpha = 1;
       }
     }
-
     ctx.restore();
   }
 }
-
 class FlowerParticle extends Entity {
   constructor(wx, wy, opts = {}) {
-    super(wx, wy, false, opts.size ?? 6);
+    super(wx, wy, false, 0);
+    this.size = opts.size ?? 6;
+
     this.vx = opts.vx ?? 0;
     this.vy = opts.vy ?? -200;
     this.life = opts.life ?? 1.2;
@@ -795,6 +888,29 @@ class CatFace extends Entity {
     this.emoji = "😼";
   }
 }
+class BouquetEntity extends Entity {
+  constructor(tx, ty, flowers) {
+    const wx = tx * blockSize + blockSize / 2;
+    const wy = ty * blockSize + blockSize / 2;
+    super(wx, wy, false, 0);
+    this.tx = tx; this.ty = ty;
+    this.flowers = flowers;
+    this.isbeingheld = false;
+    this.z = 6;
+  }
+  draw(ctx, camera) {
+    const x = this.wx - camera.x;
+    const y = this.wy - camera.y;
+    drawBouquetGhost(ctx, x, y, this.flowers, {
+      alpha: 1,
+      maxStems: 8,
+      fan: 0.9,
+      stemLen: 34,
+      headR: 7
+    });
+  }
+}
+
 // ----------------- player/tools -----------------
 class Player {
   constructor() {
@@ -808,6 +924,11 @@ class Player {
       placeIndex: 1,
       flowers: [],
       blocks: new Map()
+    };
+    this.bouquetPreview = {
+      enabled: false,
+      maxStems: 8,
+      lastTile: null,
     };
     this.tools = new Toolbelt(this);
     this.holding = [];
@@ -831,19 +952,15 @@ class Player {
       this.input.released[e.key] = true;
     });
   }
-
   beginFrame() {
     this.input.pressed = Object.create(null);
     this.input.released = Object.create(null);
     this.mouse.clicked = false;
   }
-
   isDown(key) { return !!this.input.down[key]; }
   wasPressed(key) { return !!this.input.pressed[key]; }
-
   screenToWorld(sx, sy) { return { wx: sx + this.camera.x, wy: sy + this.camera.y }; }
   mouseWorld() { return this.screenToWorld(this.mouse.sx, this.mouse.sy); }
-
   invGet(type) { return this.inventory.blocks.get(type) ?? 0; }
   invAdd(type, n = 1) { this.inventory.blocks.set(type, this.invGet(type) + n); }
   invSpend(type, n = 1) {
@@ -852,10 +969,15 @@ class Player {
     this.inventory.blocks.set(type, have - n);
     return true;
   }
-
   update(dt) {
     const speed = 300;
     let dx = 0, dy = 0;
+    if (this.wasPressed("b")) {
+      this.bouquetPreview.enabled = !this.bouquetPreview.enabled;
+    }
+    if (this.wasPressed("v") && this.sm?.scene) {
+      this.tryPlaceBouquet(this.sm.scene);
+    }
     if (this.isDown("ArrowLeft") || this.isDown("a")) dx -= 1;
     if (this.isDown("ArrowRight") || this.isDown("d")) dx += 1;
     if (this.isDown("ArrowUp") || this.isDown("w")) dy -= 1;
@@ -864,18 +986,29 @@ class Player {
 
     if (this.mouse.clicked && this.sm?.scene) this.tools.useCurrentTool(this.sm.scene);
   }
-}
+  tryPlaceBouquet(scene) {
+    const mw = this.mouseWorld();
+    const tx = Math.floor(mw.wx / blockSize);
+    const ty = Math.floor(mw.wy / blockSize);
+    if (this.inventory.flowers.length <= 0) return;
+    if (scene.getBlockAt(mw.wx, mw.wy)) return;
+    const n = Math.min(this.bouquetPreview.maxStems, this.inventory.flowers.length);
+    const bouquetFlowers = this.inventory.flowers.splice(0, n);
 
+    this.invSpend(4, n);
+    scene.entities.add(new BouquetEntity(tx, ty, bouquetFlowers));
+  }
+}
 class Toolbelt {
   constructor(player) {
     this.player = player;
     this.toolIndex = 0;
     this.tools = {
       0: { name: "Hand", action: (scene) => {
-        const { wx, wy } = this.player.mouseWorld();
-        for (const ent of scene.clickables) {
-            ent.interaction?.(scene, this.player);
-        }
+      const { wx, wy } = this.player.mouseWorld();
+      for (const ent of scene.clickables) {
+        if (ent.hitTest(wx, wy)) { ent.interaction?.(scene, this.player); break; }
+      }
       }},
       1: { name: "Shovel", action: (scene) => {
         const { wx, wy } = this.player.mouseWorld();
@@ -895,14 +1028,14 @@ class Toolbelt {
       3: { name: "HeartWand", action: (scene) => {
         const { wx, wy } = this.player.mouseWorld();
         scene.addEntity(new HeartEntity(wx, wy));
-        const vx = (Math.random() - 0.5) * 80;
-        const vy = (Math.random() - 0.5) * 80;
+        const vx = (Math.random() - 0.5) * 380;
+        const vy = (Math.random() - 0.5) * 380;
         scene.addEntity(new FloatingHeart(wx, wy, { vx, vy, life: 2.8 + Math.random() * 1.2 }))
 
       }}
     };
   }
-
+  isCurrentTool(name) { return this.currentTool().name === name; }
   currentTool() { return this.tools[this.toolIndex] ?? this.tools[0]; }
   useCurrentTool(scene) { this.currentTool().action?.(scene); }
 }
@@ -1037,7 +1170,6 @@ class Drawer {
         petalOffset = 0.9, 
         petalScale = 3.2,
     } = opts;
-
     const petalCount = f.petalCount ?? 6;
     const shapeId = f.petalShapeId ?? "triangle";
     ctx.save();
@@ -1058,16 +1190,113 @@ class Drawer {
     ctx.beginPath();
     ctx.arc(0, 0, centerR, 0, Math.PI * 2);
     ctx.fill();
-
     ctx.restore();
   }
 }
+function drawFlowerStamp2(ctx, f, opts = {}) {
+    const {
+        headR = 6,
+        centerR = 2.2,
+        petalOffset = 0.9, 
+        petalScale = 3.2,
+    } = opts;
+    const petalCount = f.petalCount ?? 6;
+    const shapeId = f.petalShapeId ?? "triangle";
+    ctx.save();
+    ctx.fillStyle = f.color ?? "rgb(220,120,220)";
+    for (let i = 0; i < petalCount; i++) {
+        const a = (Math.PI * 2 * i) / petalCount;
+        const px = Math.cos(a) * headR * petalOffset;
+        const py = Math.sin(a) * headR * petalOffset;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(a);
+        this.drawPetalShape(ctx, shapeId, petalScale);
+        ctx.restore();
+    }
+    ctx.fillStyle = "#ffd700";
+    ctx.beginPath();
+    ctx.arc(0, 0, centerR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+function bouquetPreview(player, SM){
+  if (player.bouquetPreview?.enabled) {
+    const mw = player.mouseWorld();
+    const tx = Math.floor(mw.wx / blockSize);
+    const ty = Math.floor(mw.wy / blockSize);
+    const wx = tx * blockSize + blockSize / 2;
+    const wy = ty * blockSize + blockSize / 2;
 
-// ----------------- a concrete scene -----------------
-class GardenScene {
+    const n = Math.min(player.bouquetPreview.maxStems, player.inventory.flowers.length);
+    if (n > 0) {
+      drawBouquetGhost(
+        ctx,
+        wx - player.camera.x,
+        wy - player.camera.y,
+        player.inventory.flowers.slice(0, n),
+        drawer,
+        { alpha: 0.55, maxStems: n, fan: 0.9, stemLen: 34, headR: 7 }
+      );
+
+    }
+  }
+}
+function drawBouquetGhost(ctx, sx, sy, flowers, opts = {}) {
+  const {
+    maxStems = 7,
+    fan = 0.55,
+    stemLen = 26,
+    stemW = 3,
+    headR = 6,
+    offsetY = 18,
+    alpha = 0.55,
+  } = opts;
+
+  if (!flowers || flowers.length === 0) return;
+
+  const n = Math.min(maxStems, flowers.length);
+  const start = flowers.length - n;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(sx, sy + offsetY);
+
+  for (let i = 0; i < n; i++) {
+    const f = flowers[start + i];
+    const t = (n === 1) ? 0.5 : i / (n - 1);
+    const ang = (t - 0.5) * fan;
+
+    const tipX = Math.cos(ang) * 10;
+    const tipY = -stemLen + Math.sin(ang) * 4;
+
+    // stem
+    ctx.save();
+    ctx.strokeStyle = "#2e8b57";
+    ctx.lineWidth = stemW;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    ctx.restore();
+
+    // head
+    ctx.save();
+    ctx.translate(tipX, tipY);
+    drawFlowerStamp2(ctx, f, { headR, centerR: Math.max(2, headR * 0.35) });
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+
+// ----------------- scene -----------------
+
+class FloraScene {
   constructor() {
     this.world = new World();
-    this.clickables = new Set(); 
+    this.clickables = new Set();
     this.entities = new Set();
   }
 
@@ -1079,6 +1308,11 @@ class GardenScene {
     player.invAdd(1, 200);
     player.invAdd(2, 200);
     player.invAdd(3, 200);
+
+    this.world.updateVisible(player.camera, (ent) => this.entities.add(ent));
+
+    this.clickables.clear();
+    for (const e of this.entities) e.addToClickable?.(this);
   }
 
   getBlockAt(wx, wy) { return this.world.getBlockAt(wx, wy); }
@@ -1087,18 +1321,45 @@ class GardenScene {
   addEntity(ent) { this.entities.add(ent); }
 
   update(sm, dt) {
-    this.world.updateVisible(sm.player.camera);
-
-    for (const e of this.entities) e.update(dt);
+    this.world.updateVisible(sm.player.camera, (ent) => this.entities.add(ent));
+    for (const e of this.entities) e.update(dt, this);
     for (const e of this.entities) if (!e.alive) this.entities.delete(e);
-
     this.clickables.clear();
-    for (const e of this.entities) e.addToClickable?.({ clickables: this.clickables });
+    for (const e of this.entities) e.addToClickable?.(this);
   }
 
+  drawOverlay(sm, ctx) { /* same as yours */ }
+}
+
+class GardenScene {
+  constructor() {
+    this.world = new World();
+    this.clickables = new Set(); 
+    this.entities = new Set();
+  }
+  onEnter(sm, player) {
+    player.sm = sm;
+    player.camera.x = -canvas.width / 2;
+    player.camera.y = 0;
+
+    player.invAdd(1, 200);
+    player.invAdd(2, 200);
+    player.invAdd(3, 200);
+  }
+  getBlockAt(wx, wy) { return this.world.getBlockAt(wx, wy); }
+  placeBlockAt(wx, wy, type) { this.world.setBlockAt(wx, wy, type); }
+  removeBlockAt(wx, wy) { this.world.removeBlockAt(wx, wy); }
+  addEntity(ent) { this.entities.add(ent); }
+
+  update(sm, dt) {
+    this.world.updateVisible(sm.player.camera, (e) => this.entities.add(e));
+    for (const e of this.entities) e.update(dt, this);
+    for (const e of this.entities) if (!e.alive) this.entities.delete(e);
+    this.clickables.clear();
+    for (const e of this.entities) e.addToClickable?.(this);
+  }
   drawWorld(sm, ctx, camera) {
   }
-
   drawOverlay(sm, ctx) {
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.85)";
@@ -1108,18 +1369,23 @@ class GardenScene {
     ctx.restore();
   }
 }
-
-// ----------------- bootstrap -----------------
+const _HAND_ACTION_FIX = function (scene) {
+  const { wx, wy } = this.player.mouseWorld();
+  for (const ent of scene.clickables) {
+    if (ent.hitTest?.(wx, wy)) {
+      ent.interaction?.(scene, this.player);
+      break;
+    }
+  }
+};
 const player = new Player();
-
 const scenes = {
-  garden: new GardenScene()
+  garden: new GardenScene(),
+  flora: new FloraScene()
 };
 
 const SM = new SceneManager(
-  {
-   garden: scenes.garden
-  },
+  { garden: scenes.garden, flora: scenes.flora },
   "garden",
   player
 );
@@ -1132,6 +1398,9 @@ window.addEventListener("keydown", (e) => {
 
   if (e.key === "z") player.inventory.placeIndex = Math.max(1, player.inventory.placeIndex - 1);
   if (e.key === "x") player.inventory.placeIndex = Math.min(3, player.inventory.placeIndex + 1);
+  
+  if (e.key === "g") SM.goto("garden");
+  if (e.key === "f") SM.goto("flora");
 });
 
 // ----------------- main loop -----------------
@@ -1145,18 +1414,13 @@ function loop(now) {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // background
   SM.drawer.drawBackground(now);
-
-  // world blocks (from current scene)
-  const sceneObj = scenes.garden;
+  const sceneObj = SM.scene; // current active scene
   SM.drawer.drawWorldBlocks(sceneObj.world);
-
-  // entities
   SM.drawer.drawEntities(sceneObj.entities);
 
-  // HUD + overlays
   SM.drawer.drawHUD(player);
+  bouquetPreview(SM.drawer,player, SM);
   SM.drawOverlay(ctx);
 
   player.beginFrame();
