@@ -93,7 +93,6 @@ function snapToBlock(wx) { return Math.floor(wx / blockSize) * blockSize; }
 function snapToGrid(wx, wy) {
   return { wx: Math.floor(wx / blockSize) * blockSize, wy: Math.floor(wy / blockSize) * blockSize };
 }
-
 class SceneManager {
     constructor(defs, startId, player) {
     this.defs = defs;
@@ -101,9 +100,7 @@ class SceneManager {
     this.scene = null;
     this.t = 0;
     this.state = {};
-    this._events = [];
-
-    this.entities = new Set();
+    this._events = [];    this.entities = new Set();
     this.clickables = new Set();
     this.spawners = [];
     this.player = player;
@@ -135,11 +132,8 @@ class SceneManager {
     }
     if (this.scene?.update) this.scene.update(this, dt);
   }
-  drawWorld(ctx, camera) {
-    if (this.scene?.drawWorld) this.scene.drawWorld(this, ctx, camera);
-  }
-  drawOverlay(ctx) {
-    if (this.scene?.drawOverlay) this.scene.drawOverlay(this, ctx);
+  draw(sm, dt) {
+    if (this.scene?.draw) this.scene.draw(this, sm.drawer, dt);
   }
   reloadClickables() {
     this.clickables.clear();
@@ -306,9 +300,7 @@ class Player {
       this.mouse.sy = e.clientY - r.top;
     });
     c.addEventListener("mousedown", () => { this.mouse.down = true; this.mouse.clicked = true; });
-    window.addEventListener("mouseup", () => { this.mouse.down = false; });
-
-    window.addEventListener("keydown", (e) => {
+    window.addEventListener("mouseup", () => { this.mouse.down = false; });    window.addEventListener("keydown", (e) => {
       if (!this.input.down[e.key]) this.input.pressed[e.key] = true;
       this.input.down[e.key] = true;
     });
@@ -347,9 +339,7 @@ class Player {
     if (this.isDown("ArrowRight") || this.isDown("d")) dx += 1;
     if (this.isDown("ArrowUp") || this.isDown("w")) dy -= 1;
     if (this.isDown("ArrowDown") || this.isDown("s")) dy += 1;
-    if (dx || dy) { this.camera.x += dx * speed * dt; this.camera.y += dy * speed * dt; }
-
-    if (this.mouse.clicked && this.sm?.scene) this.tools.useCurrentTool(this.sm.scene);
+    if (dx || dy) { this.camera.x += dx * speed * dt; this.camera.y += dy * speed * dt; }    if (this.mouse.clicked && this.sm?.scene) this.tools.useCurrentTool(this.sm.scene);
   }
   tryPlaceBouquet(scene) {
     const mw = this.mouseWorld();
@@ -392,7 +382,6 @@ class Toolbelt {
         const vx = (Math.random() - 0.5) * 380;
         const vy = (Math.random() - 0.5) * 380;
         scene.addEntity(new FloatingHeart(wx, wy, { vx, vy, life: 2.8 + Math.random() * 1.2 }))
-
       }}
     };
   }
@@ -417,16 +406,12 @@ class Drawer {
     const skyColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
     ctx.fillStyle = skyColor;
     ctx.fillRect(0, 0, w, h);
-    
-    // Draw parallax layers
     for (const layerKey of ["hills", "mountains", "trees", "stars"]) {
         const layer = backgroundSettings[layerKey];
         if (!layer.enabled) continue;
-        
         const layerColor = this.blendColors(layer.colors, colorBlendFactor);
         ctx.fillStyle = layerColor;
         
-        // Get opacity for this layer based on time of day
         let opacity = timeSettings.timeOpacities.day[layerKey] ?? 0.5;
         if (dayFactor >= 0.5) {
         const t = (1 - dayFactor) / 0.5;
@@ -435,13 +420,11 @@ class Drawer {
         }
         ctx.globalAlpha = opacity;
         
-        this.drawParallaxLayer(ctx, layerKey, layer.frequency, layer.panSpeed, w, h);
+        this.drawParallaxLayer(layerKey, layer.frequency, layer.panSpeed, w, h);
     }
-    
     ctx.globalAlpha = 1.0;
   }
-
-  drawParallaxLayer(ctx, layerKey, frequency, panSpeed, w, h) {
+  drawParallaxLayer(layerKey, frequency, panSpeed, w, h) {
     const offset = (performance.now() * panSpeed * 0.001) % w;
     
     ctx.beginPath();
@@ -449,7 +432,6 @@ class Drawer {
     for (let x = -w; x < w * 2; x += 10) {
         const noiseVal = noise2D((x + offset) * frequency, layerKey.charCodeAt(0));
         const waveY = y + noiseVal * 20;
-        
         if (x === -w) ctx.moveTo(x, waveY);
         else ctx.lineTo(x, waveY);
     }
@@ -470,20 +452,15 @@ class Drawer {
   drawWorldBlocks(world) {
     for (const ch of world.visibleChunks) {
       const x0 = ch.cx * chunkSize * blockSize;
-      const y0 = ch.cy * chunkSize * blockSize;
-
-      for (const [k, b] of ch.blocks) {
+      const y0 = ch.cy * chunkSize * blockSize;      for (const [k, b] of ch.blocks) {
         const [bx, by] = k.split(",").map(Number);
         const wx = x0 + bx;
         const wy = y0 + by;
         const sx = wx - this.camera.x;
         const sy = wy - this.camera.y;
-
         if (sx + blockSize < 0 || sy + blockSize < 0 || sx > canvas.width || sy > canvas.height) continue;
-
         const tx = Math.floor(wx / blockSize);
         const ty = Math.floor(wy / blockSize);
-
         ctx.fillStyle = tileColor(b.type, tx, ty);
         ctx.fillRect(sx, sy, blockSize, blockSize);
       }
@@ -494,16 +471,16 @@ class Drawer {
     for (const e of sorted) {
         //find kind of entity and draw accordingly
         switch(e.type) {
-            case "heart": this.drawHeartEntity(ctx, this.camera, e); break;
-            case "floatingHeart": this.drawFloatingHeart(ctx, this.camera, e); break;
-            case "flower": this.drawFlowerEntity(ctx, this.camera, e); break;
-            case "flowerParticle": this.drawFlowerParticle(ctx, this.camera, e); break;
-            case "bouquet": this.drawBouquetEntity(ctx, this.camera, e); break;
-            case "bigFlower": this.drawBigFlower(ctx, this.camera, e); break;
+            case "heart": this.drawHeartEntity(this.camera, e); break;
+            case "floatingHeart": this.drawFloatingHeart(this.camera, e); break;
+            case "flower": this.drawFlowerEntity(this.camera, e); break;
+            case "flowerParticle": this.drawFlowerParticle(this.camera, e); break;
+            case "bouquet": this.drawBouquetEntity(this.camera, e); break;
+            case "bigFlower": this.drawBigFlower(this.camera, e); break;
         }
     }
   }
-  drawFloatingHeart(ctx, camera, heart) {
+  drawFloatingHeart(camera, heart) {
     const x = heart.wx - camera.x;
     const y = heart.wy - camera.y;
     ctx.save();
@@ -517,7 +494,7 @@ class Drawer {
     ctx.fill();
     ctx.restore();
   }
-  drawFlowerEntity(ctx, camera, flower) {
+  drawFlowerEntity(camera, flower) {
     const screenX = flower.wx - camera.x;
     const screenY = flower.wy - camera.y;
     ctx.save();
@@ -534,7 +511,6 @@ class Drawer {
       const angle = (Math.PI * 2 * i) / flower.petalCount;
       const px = screenX + Math.cos(angle) * radius;
       const py = flowerTopY + Math.sin(angle) * radius;
-
       ctx.beginPath();
       ctx.arc(px, py, blockSize * 0.3, 0, Math.PI * 2);
       ctx.fill();
@@ -545,7 +521,7 @@ class Drawer {
     ctx.fill();
     ctx.restore();
   }
-  drawHeartEntity(ctx, camera, heart) {
+  drawHeartEntity(camera, heart) {
     const x = heart.wx - camera.x;
     const y = heart.wy - camera.y;
     ctx.save();
@@ -558,7 +534,7 @@ class Drawer {
     ctx.fill();
     ctx.restore();
   }
-  drawFlowerParticle(ctx, camera, particle) {
+  drawFlowerParticle(camera, particle) {
     const x = particle.wx - camera.x;
     const y = particle.wy - camera.y;
     ctx.save();
@@ -578,12 +554,12 @@ class Drawer {
     }
     ctx.restore();
   }
-  drawBouquetEntity(ctx, camera, bouquet) {
+  drawBouquetEntity(camera, bouquet) {
     const x = bouquet.wx - camera.x;
     const y = bouquet.wy - camera.y;
-    this.drawBouquetGhost(ctx, x, y, bouquet.flowers, { alpha: 1.0, maxStems: bouquet.flowers.length, fan: 0.9, stemLen: 34, headR: 7 });
+    this.drawBouquetGhost(x, y, bouquet.flowers, { alpha: 1.0, maxStems: bouquet.flowers.length, fan: 0.9, stemLen: 34, headR: 7 });
   }
-  drawBigFlower(ctx, camera, bigFlower) {
+  drawBigFlower(camera, bigFlower) {
     ctx.save();
     ctx.lineCap = "round";
     ctx.strokeStyle = "#2e8b57";
@@ -613,17 +589,13 @@ class Drawer {
       const aT = (bigFlower.mode === "blossom")
         ? 1
         : Math.max(0, (bigFlower.grow - 0.6) / 0.4);
-
       if (aT > 0) {
         ctx.globalAlpha = aT;
-
         for (const a of bigFlower.attachments) {
           if (a.node > segsToDraw) continue;
-
           const n = bigFlower.nodes[a.node];
           const x = n.x - camera.x;
           const y = n.y - camera.y;
-
           if (a.kind === "leaf") {
             ctx.save();
             ctx.translate(x, y);
@@ -657,7 +629,7 @@ class Drawer {
     }
     ctx.restore();
   }
-  drawMessageBox(ctx, message) {
+  drawMessageBox(message) {
     if (!message.visible) return;
     const w = canvas.width;
     const h = canvas.height;
@@ -667,13 +639,13 @@ class Drawer {
     const y = h * message.y;
     ctx.save();
     ctx.globalAlpha = 0.92;
-    roundRect(ctx, x, y, bw, bh, message.corner);
+    this.roundRect(x, y, bw, bh, message.corner);
     ctx.fillStyle = "rgba(10,10,12,0.70)";
     ctx.fill();
     ctx.globalAlpha = 1;
     ctx.lineWidth = 2;
     ctx.strokeStyle = "rgba(255,255,255,0.22)";
-    roundRect(ctx, x, y, bw, bh, message.corner);
+    this.roundRect(x, y, bw, bh, message.corner);
     ctx.stroke();
     ctx.fillStyle = "rgba(255,255,255,0.92)";
     ctx.font = "18px system-ui, sans-serif";
@@ -681,7 +653,7 @@ class Drawer {
     ctx.textBaseline = "top";
 
     const shown = message.text.slice(0, message.typed);
-    drawWrappedTextCentered(ctx, shown, x + bw / 2, y + message.pad, bw - message.pad * 2, 24);
+    this.drawWrappedTextCentered(shown, x + bw / 2, y + message.pad, bw - message.pad * 2, 24);
     if (message.done) {
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.font = "13px system-ui, sans-serif";
@@ -690,7 +662,7 @@ class Drawer {
     }
     ctx.restore();
   }
-  roundRect(ctx, x, y, w, h, r) {
+  roundRect(x, y, w, h, r) {
     const rr = Math.min(r, w * 0.5, h * 0.5);
     ctx.beginPath();
     ctx.moveTo(x + rr, y);
@@ -700,7 +672,7 @@ class Drawer {
     ctx.arcTo(x, y, x + w, y, rr);
     ctx.closePath();
   }
-  drawWrappedText(ctx, text, x, y, maxW, lineH) {
+  drawWrappedText(text, x, y, maxW, lineH) {
     const words = text.split(/\s+/);
     let line = "";
     let yy = y;
@@ -716,7 +688,22 @@ class Drawer {
     }
     if (line) ctx.fillText(line, x, yy);
   }
-
+  drawWrappedTextCentered(text, cx, y, maxW, lineH) {
+    const words = text.split(/\s+/);
+    let line = "";
+    let yy = y;
+    for (let i = 0; i < words.length; i++) {
+        const test = line ? (line + " " + words[i]) : words[i];
+        if (ctx.measureText(test).width > maxW && line) {
+        ctx.fillText(line, cx, yy);
+        line = words[i];
+        yy += lineH;
+        } else {
+        line = test;
+        }
+    }
+    if (line) ctx.fillText(line, cx, yy);
+  }
   drawHUD(player) {
     const tool = player.tools.currentTool();
     ctx.save();
@@ -729,7 +716,7 @@ class Drawer {
     ctx.fillText(`PlaceIndex: ${player.inventory.placeIndex} (Z/X to change)`, 18, 70);
     ctx.restore();
   }
-  drawPetalShape(ctx, shapeId, scale = 1) {
+  drawPetalShape(shapeId, scale = 1) {
     const shape = petalShapes[shapeId] ?? petalShapes.triangle;
     if (Array.isArray(shape)) {
         ctx.beginPath();
@@ -753,7 +740,7 @@ class Drawer {
         ctx.fill();
     }
   }
-  drawFlowerStamp(ctx, f, opts = {}) {
+  drawFlowerStamp(f, opts = {}) {
     const {
         headR = 6,
         centerR = 2.2,
@@ -768,11 +755,10 @@ class Drawer {
         const a = (Math.PI * 2 * i) / petalCount;
         const px = Math.cos(a) * headR * petalOffset;
         const py = Math.sin(a) * headR * petalOffset;
-
         ctx.save();
         ctx.translate(px, py);
         ctx.rotate(a);
-        this.drawPetalShape(ctx, shapeId, petalScale);
+        this.drawPetalShape(shapeId, petalScale);
         ctx.restore();
     }
     ctx.fillStyle = "#ffd700";
@@ -781,7 +767,7 @@ class Drawer {
     ctx.fill();
     ctx.restore();
   }
-  drawBouquetGhost(ctx, sx, sy, flowers, opts = {}) {
+  drawBouquetGhost(sx, sy, flowers, opts = {}) {
     const {
         maxStems = 7,
         fan = 0.55,
@@ -822,7 +808,7 @@ class Drawer {
         // head
         ctx.save();
         ctx.translate(tipX, tipY);
-        this.bouquetPreviewdrawFlowerStamp(ctx, f, { headR, centerR: Math.max(2, headR * 0.35) });
+        this.drawFlowerStamp(f, { headR, centerR: Math.max(2, headR * 0.35) });
         ctx.restore();
     }
     ctx.restore();
@@ -838,7 +824,6 @@ class Drawer {
             const n = Math.min(player.bouquetPreview.maxStems, player.inventory.flowers.length);
             if (n > 0) {
             this.drawBouquetGhost(
-                ctx,
                 wx - player.camera.x,
                 wy - player.camera.y,
                 player.inventory.flowers.slice(0, n),
@@ -869,7 +854,7 @@ class Entity {
     return (dx * dx + dy * dy) <= (this.radius * this.radius);
   }
   interaction(scene, player) {} //for subclass override
-  draw(ctx, camera) {
+  draw(camera) {
     //defunct, drawn in drawer
   }
 }
@@ -1260,6 +1245,9 @@ class MessageBox extends Entity {
     this.timer = 0;
     this.done = opts.instant ? true : (this.text.length === 0);
   }
+  hide() {
+    this.visible = false;
+  }
   advance({ hideOnDone = false } = {}) {
     if (!this.visible) return;
     if (!this.done) {
@@ -1393,7 +1381,7 @@ class Scene {
       if (ent.hitTest(wx, wy)) { ent.interaction?.(this, player); break; }
     }
   }
-  startMessages() {
+  startMessages(messages) {
     this.messageQueue = messages.slice(); // copy
     this._messageIndex = 0;
     this.MSG.show(this.messageQueue[this._messageIndex], {speed: 40});
@@ -1420,7 +1408,7 @@ class Scene {
     this.world.updateVisible(player.camera, (ent) => this.entities.add(ent));
     this.MSG.update(dt);
     for (const ent of this.entities) {
-      ent.update?.(dt, this.world);
+      ent.update?.(dt, this);
     }
     for (const spawner of this.spawners) {
         spawner.update(dt);
@@ -1428,28 +1416,28 @@ class Scene {
     for (const ent of this.entities) if (!ent.alive) this.entities.delete(ent);
     if(!player.mouse.clicked){
         if (this.MSG.visible && this.MSG.done) {
-            this.advanceMessage();
-        } else {
             this.handleClick(player);
+        } else {
+            this.advanceMessage();
         }
     }
-    if (player.wasPressed(" " && this.MSG.visible && this.MSG.done)) {
+    if (player.wasPressed(" ") && this.MSG.visible) {
         this.advanceMessage({ hideOnDone: true });
     }
   }
   periodicUpdate(dt) {
     this.rebuildClickables();
   }
-  draw(sm, ctx, now) {
+  draw(sm, now) {
     const player = sm.player;
     const drawer = sm.drawer;
     drawer.drawBackground(now);
-    drawer.drawWorldBlocks(ctx, player.camera, this.world);
-    drawer.drawEntities(ctx, player.camera, this.entities);
+    drawer.drawWorldBlocks(this.world);
+    drawer.drawEntities(this.entities);
     drawer.drawHUD(player);
-    drawer.drawMessageBox(ctx, this.MSG);
+    drawer.drawMessageBox(this.MSG);
   }
-  drawOverlay(sm, ctx) {
+  drawOverlay(sm) {
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.font = "24px system-ui, sans-serif";
@@ -1474,11 +1462,12 @@ const SM = new SceneManager(
 function loop(now){
     const dt = (now - lastTime) / 1000;
     lastTime = now;
-
+    player.beginFrame();
+    player.update(dt);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     SM.update(dt);
-    // SM.draw(ctx, now);
-    SM.drawOverlay(ctx);
-
+    SM.draw(SM, dt);
+    player.clicked = false; // reset click state after handling
     requestAnimationFrame(loop);
 }
 
