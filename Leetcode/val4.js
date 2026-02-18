@@ -1,8 +1,11 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-const blockSize = 10;
-const chunkSize = 16;
+const blockSize = 8;
+const chunkSize = 10;
+const globalSceneControl = {
+    time: 37000,
+}
 const backgroundSettings = {
   hills: { enabled: true, frequency: 0.01, 
     colors: {midnight: "#144234", noon: "#2aa165", sunset: "#7f8d46"},
@@ -17,13 +20,13 @@ const backgroundSettings = {
     {midnight: "#000000", noon: "#ffff1d", sunset: "#c54719"}, panSpeed: 0.05 },
   sky: { enabled: true, colors: {
         midnight: {top: "#001d3d", bottom: "#000000"},
-        noon: {top: "#87dceb", bottom: "#ffffff"},
+        noon: {top: "#9af8ff", bottom: "#ffffff"},
         sunset: {top: "#ee9ef2", bottom: "#d36e20"}
     }},
 };
 const timeSettings = {
-    dayColorTransition: 0.1, // how quickly the background transitions between day/night colors
-    dayNightCycleSpeed: 0.00001, // how quickly time progresses (affects sun position and color)
+    dayColorTransition: 0.1, 
+    dayNightCycleSpeed: 0.00001, 
     sunSize: 50, // radius of the sun
     sunPathHeight: 150, // how high the sun arcs in the sky
     timeOpacities: {
@@ -226,9 +229,9 @@ class Chunk {
   generateProcedural() {
     const worldX0 = this.cx * chunkSize * blockSize;
     const worldY0 = this.cy * chunkSize * blockSize;
-    const grassThicknessPx = 4 * blockSize;
-    const dirtDepthPx = 12 * blockSize;
-    const start = Math.round(canvas.height / 1.5);
+    const grassThicknessPx = 10 * blockSize;
+    const dirtDepthPx = 10 * blockSize;
+    const start = Math.round(canvas.height / 1.3);
     for (let bx = 0; bx < chunkSize * blockSize; bx += blockSize) {
       let markedTop = false;
       for (let by = 0; by < chunkSize * blockSize; by += blockSize) {
@@ -249,25 +252,25 @@ class Chunk {
       }
     }
   }
-  decorate(spawnEntity) {
+  decorate(spawnEntity, f = 6, t = 10, b = 26) {
     for (const p of this.floraViable) {
       const tx = Math.floor(p.wx / blockSize);
       const ty = Math.floor(p.wy / blockSize);
       const h = hash2i(tx, ty, 7777);
-      if ((h % 6) === 0) {
+      if ((h % f) === 0) {
         spawnEntity(new FlowerEntity(tx, ty));
       }
-      if ((h % 20) === 0) {
+      if ((h % t) === 0) {
         this._placeTreeAt(p.wx, p.wy);
       }
-      if ((h % 10) === 0) {
+      if ((h % b) === 0) {
         spawnEntity(new BigFlower(p.wx + blockSize / 2, p.wy + blockSize / 2, h));
       }
     }
   }
   _placeTreeAt(wx, wy) {
     const hh = hash2i((wx / blockSize) | 0, (wy / blockSize) | 0, 2222);
-    const height = 16 + (hh % 4);
+    const height = 20 + (hh % 4);
     for (let i = 1; i <= height; i++) {
       this.setBlockAt(wx, wy - i * blockSize, 4); 
     }
@@ -421,7 +424,7 @@ class Drawer {
   worldToScreen(wx, wy) { return { sx: wx - this.camera.x, sy: wy - this.camera.y }; }
   drawBackground(now) {
     const w = this.canvas.width, h = this.canvas.height;
-    const time = (now * timeSettings.dayNightCycleSpeed) % 2;
+    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
     const dayFactor = 0.5 + 0.5 * Math.cos(time * Math.PI * 2);
     const topSkyColor = this.blendColors({
         midnight: backgroundSettings.sky.colors.midnight.top,
@@ -438,18 +441,20 @@ class Drawer {
     grad.addColorStop(1, bottomSkyColor);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);    
-    const colorBlendFactor = dayFactor;
-    const sunTimePhase = time + 0.2
+    const colorBlendFactor = dayFactor; 
+    const sunTimePhase = (time + 0.2) % 1
     if (backgroundSettings.sun.enabled) {
+    ctx.filter = 'blur(3px)'
         const sunColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
         ctx.fillStyle = sunColor;
         const sunX = w * sunTimePhase;
         const sunY = h * 0.5 - Math.sin(sunTimePhase * Math.PI * 2.2) * timeSettings.sunPathHeight;
         const alphaBase = timeSettings.timeOpacities.day.sun ?? 1.0;
-        ctx.globalAlpha = alphaBase * ((dayFactor >= 0.5) ? (1 - dayFactor) / 0.5 : 1);
+        ctx.globalAlpha = alphaBase * ((dayFactor <= 0.5) ? (1 - dayFactor) / 0.5 : 1);
         ctx.beginPath();
         ctx.arc(sunX, sunY, timeSettings.sunSize, 0, Math.PI * 2);
         ctx.fill();
+        ctx.filter = 'none'
     }
     ctx.globalAlpha = 1.0;
     if (backgroundSettings.stars.enabled) {        
@@ -469,14 +474,14 @@ class Drawer {
         }
     }
     ctx.globalAlpha = 1.0;
-    ctx.filter = 'blur(4px)'
+    ctx.filter = 'blur(3px)'
     for (const layerKey of [ "mountains", "hills", "trees"]) {
         const layer = backgroundSettings[layerKey];
         if (!layer.enabled) continue;
         const layerColor = this.blendColors(layer.colors, colorBlendFactor);
         const newGrad = ctx.createLinearGradient(0,0,0,h)
         newGrad.addColorStop(0, layerColor);
-        newGrad.addColorStop(1, 'white');
+        newGrad.addColorStop(1, 'black');
         ctx.fillStyle = newGrad;
         let opacity = timeSettings.timeOpacities.day[layerKey] ?? 0.5;
         if (dayFactor >= 0.5) {
@@ -485,12 +490,11 @@ class Drawer {
         opacity = timeSettings.timeOpacities.day[layerKey] + (nightOp - timeSettings.timeOpacities.day[layerKey]) * t;
         }
         const baseH = layer.baseHeight
-        ctx.globalAlpha = opacity;
+        // ctx.globalAlpha = opacity;
         
         this.drawParallaxLayer(layerKey, layer.frequency, layer.panSpeed, w, h, baseH);
     }
     ctx.filter = 'none'
-
 
   }
   drawParallaxLayer(layerKey, frequency, panSpeed, w, h, baseH) {
@@ -1460,9 +1464,10 @@ class Scene {
   }
   handleClick(player) {
     const { wx, wy } = player.mouseWorld();
-    for (const ent of this.clickables) {
-      if (ent.hitTest(wx, wy)) { ent.interaction?.(this, player); break; }
-    }
+    player.tools.useCurrentTool(this)
+    // for (const ent of this.clickables) {
+    //   if (ent.hitTest(wx, wy)) { ent.interaction?.(this, player); break; }
+    // }
   }
   startMessages(messages) {
     this.messageQueue = messages.slice(); // copy
@@ -1512,7 +1517,8 @@ class Scene {
   draw(sm, now) {
     const player = sm.player;
     const drawer = sm.drawer;
-    drawer.drawBackground(now);
+    const controlledNow = globalSceneControl.time + now
+    drawer.drawBackground(controlledNow);
     drawer.drawWorldBlocks(this.world);
     drawer.drawEntities(this.entities);
     drawer.drawHUD(player);
@@ -1527,15 +1533,37 @@ class Scene {
     ctx.restore();
   }
 }
+class ValentineScene extends Scene {
+    constructor() {
+        super();
+        this.type = "valentineScene";
+        this.messageQueue = [
+            "hello",
+        ]
+    }
+    onEnter(sm, player, payload = {}) {
+        this.world.updateVisible(player.camera, (ent) => this.entities.add(ent));
+        this.rebuildClickables(player);
+        if (payload.messages?.length){
+            this.startMessages(payload.messages);
+        }
+        //get first chunk
+        const chunk = this.world.getChunk(0, 0);
+        if (chunk) {
+            chunk.decorate(null, 70,70,1)
+        }
+    }
+}
 
 let lastTime = 0;
 let now = 0;
 const player = new Player();
 const scenes = {
   scene: new Scene(),
+  valentine: new ValentineScene()
 };
 const SM = new SceneManager(
-  { scene: scenes.scene },
+  {scene: scenes.scene, valentine: scenes.valentine},
   "scene",
   player
 );
@@ -1553,24 +1581,3 @@ function loop(now){
     requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop)
-// let logDone = false;
-// //asynch
-// function anim(now) {
-//     // ctx.clearRect(0, 0, canvas.width, canvas.height);
-//     if (!logDone) return;
-//     const dt = (now - lastTime) / 1000;
-//     lastTime = now;
-//     SM.draw(now);
-// }
-// function log(now){
-//     // logDone = false
-//     const dt = (now - lastTime) / 1000;
-//     lastTime = now;
-//     player.update(dt);
-//     SM.update(dt);
-//     player.beginFrame();
-//     // logDone = true;
-// }
-
-// setInterval(anim(now), 50)
-// setInterval(log(now), 50)
