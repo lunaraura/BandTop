@@ -1,10 +1,12 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+// ===
 const blockSize = 8;
 const chunkSize = 10;
 const globalSceneControl = {
     time: 79000,
+    starPan: {x: 0, y: 0}
 }
 let EmergencyGlobals = {
     sm: null, player: null, scene: null
@@ -22,11 +24,12 @@ const backgroundSettings = {
   sun: { enabled: true, colors:
     {midnight: "#000000", noon: "#ffff1d", sunset: "#c54719"}, panSpeed: 0.05 },
   sky: { enabled: true, colors: {
-        midnight: {top: "#001d3d", bottom: "#000000"},
+        midnight: {top: "#001020", bottom: "#000000"},
         noon: {top: "#9af8ff", bottom: "#ffffff"},
-        sunset: {top: "#ee9ef2", bottom: "#d36e20"}
+        sunset: {top: "#dc88e0", bottom: "#b35309"}
     }},
 };
+let backgroundCache = {};
 const timeSettings = {
     dayColorTransition: 0.1, 
     dayNightCycleSpeed: 0.000005, 
@@ -71,8 +74,6 @@ function resizeCanvas() {
 }
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
-
-// ----------------- utils -----------------
 function hexToRgb(hex) {
   const h = hex.startsWith("#") ? hex.slice(1) : hex;
   return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
@@ -118,6 +119,9 @@ function snapToBlock(wx) { return Math.floor(wx / blockSize) * blockSize; }
 function snapToGrid(wx, wy) {
   return { wx: Math.floor(wx / blockSize) * blockSize, wy: Math.floor(wy / blockSize) * blockSize };
 }
+// ====
+
+// ===
 class SceneManager {
     constructor(defs, startId, player) {
     this.defs = defs;
@@ -488,212 +492,346 @@ class Toolbelt {
     }
   }
 }
-
+class RenderCache {
+    constructor() {
+        this.items = new Map();
+    }
+    get(key, w, h){
+        let it = this.items.get(key)
+        if (!it || it !== w || it.h !== h) {
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height= h;
+            it = {canvas, ctx: canvas.getContext("2d"), w, h, last:null, dirty: true}
+            this.items.set(key, it)
+        }
+        return it;
+    }
+    markDirty(prefixOrKey) {
+        for (const [k, it] of this.items){
+            if (k === prefixOrKey || k.startsWith(prefixOrKey)) it.dirty = true
+        }
+    }
+}
 class Drawer {
   constructor(camera, canvas, sm) {
     this.camera = camera;
     this.canvas = canvas;
     this.sm = sm;
+    this.cache = new RenderCache();
+    this.bgFPS = 16
+    this.layerFPS = 16
+    this._lastSkySig = "";
   }
   worldToScreen(wx, wy) { return { sx: wx - this.camera.x, sy: wy - this.camera.y }; }
   drawBackground(now) {
     const w = this.canvas.width, h = this.canvas.height;
+
+    // --- SKY cache (gradient + sun). Depends on time/dayFactor only ---
+    const sky = this.cache.get("bg:sky", w, h);
+    const skySig = this._skySignature(now); // string or small number tuple
+    if (sky.dirty || sky.last !== skySig || this._shouldRedraw(now, sky, this.bgFps)) {
+      this._renderSky(sky.ctx, w, h, now);
+      sky.last = skySig;
+      sky.dirty = false;
+    }
+    ctx.drawImage(sky.canvas, 0, 0);
+
+    // --- STARS cache (optional separate). Depends on time + settings ---
+    if (backgroundSettings.stars.enabled) {
+      const stars = this.cache.get("bg:stars", w, h);
+      const starSig = this._starsSignature(now);
+      if (stars.dirty || stars.last !== starSig || this._shouldRedraw(now, stars, this.bgFps)) {
+        stars.ctx.clearRect(0, 0, w, h);
+        this._renderStars(stars.ctx, w, h, now);
+        stars.last = starSig;
+        stars.dirty = false;
+      }
+      ctx.drawImage(stars.canvas, 0, 0);
+    }
+    const clouds = this.cache.get("bg:clouds", w, h);
+    const cloudSig = this._cloudSignature(now);
+    if (clouds.dirty || clouds.last !== cloudSig || this._shouldRedraw(now, clouds, 12)) {
+        clouds.ctx.clearRect(0, 0, w, h);
+        this._renderClouds(clouds.ctx, w, h, now);
+        clouds.last = cloudSig;
+        clouds.dirty = false;
+    }
+    ctx.drawImage(clouds.canvas, 0, 0);
+    // --- LAYERS cache (mountains/hills/trees silhouettes + noise overlay) ---
+    for (const layerKey of ["mountains", "hills", "trees"]) {
+      const layer = backgroundSettings[layerKey];
+      if (!layer?.enabled) continue;
+
+      const key = `bg:layer:${layerKey}`;
+      const lay = this.cache.get(key, w, h);
+
+      // signature should include the things that affect pixels:
+      // time/dayFactor -> colors/opacity, plus "drift phase" if noise moves
+      const sig = this._layerSignature(layerKey, now);
+
+      if (lay.dirty || lay.last !== sig || this._shouldRedraw(now, lay, this.layerFps)) {
+        lay.ctx.clearRect(0, 0, w, h);
+        this._renderLayer(lay.ctx, layerKey, w, h, now);
+        lay.last = sig;
+        lay.dirty = false;
+      }
+
+      ctx.drawImage(lay.canvas, 0, 0);
+    }
+  }
+  _cloudSignature(now) {
+    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
+    const qt = (time * 120) | 0; // less frequent redraws for clouds
+    const drift = ((now * 0.00002) * 60) | 0;
+    return `clouds|t:${qt}|d:${drift}`;
+  }
+  _renderClouds(g, w, h, now) {
     const time = (now * timeSettings.dayNightCycleSpeed) % 1;
     const dayFactor = 0.5 + 0.5 * Math.cos(time * Math.PI * 2);
-    const pivotPoint = {x: 0, y:h}
-    const sunAngle = time * Math.PI * 2 - Math.PI / 2;
-    const starAngle = (time * backgroundSettings.stars.panSpeed * Math.PI * 2) % (Math.PI * 2);
+
+    // Cloud color
+    const cloudColor = this.blendColors(
+        {
+        midnight: "#2a2a3e",
+        noon: "#ffffff",
+        sunset: "#ffa500"
+        },
+        dayFactor
+    );
+
+    const drift = (now * 0.002) % w;
+
+    const cloudCount = 100;
+    const cloudHeight = h * 0.25;
+
+    for (let i = 0; i < cloudCount; i++) {
+        const baseCx = (drift + (i * w) / cloudCount) % (w );
+        const baseCy = cloudHeight + noise2D(i * 0.5, 1000) * h * 0.3;
+
+        // Cloud width/scale varies per cloud
+        const cloudScale = 0.5 + noise1D(i * 0.3, 5555) * 0.3;
+        const puffCount = 40 + (i % 3);
+
+        // Pulse alpha gently for organic feel
+        const alphaPulse = 0.25 + 0.15 * Math.sin(time * Math.PI * 2 + i * 0.5);
+
+        g.fillStyle = cloudColor;
+        g.globalAlpha = alphaPulse;
+
+        // Draw overlapping circles (puffs) to form a blob
+        for (let p = 0; p < puffCount; p++) {
+        const puffAngle = (Math.PI * 20* p) / puffCount ;
+        const puffDist = 50 * cloudScale ;
+        const puffX = baseCx + Math.cos(puffAngle) * puffDist;
+        const puffY = baseCy + Math.sin(puffAngle) * puffDist * 0.65; // squash vertically
+        const puffRadius = (25 + noise1D(i * 1 + p, 7777) * 25) * cloudScale;
+
+        g.beginPath();
+        g.arc(puffX, puffY, puffRadius, 0, Math.PI * 2);
+        g.fill();
+        }
+
+        // Central puff (larger)
+        g.beginPath();
+        g.arc(baseCx, baseCy, 40 * cloudScale, 0, Math.PI * 2);
+        g.fill();
+    }
+
+    g.globalAlpha = 1.0;
+  }
+  _shouldRedraw(now, cacheItem, fps) {
+    // now is ms from rAF; cacheItem._t is last draw time in ms
+    const every = 1000 / fps;
+    const t = cacheItem._t ?? -1e9;
+    if (now - t >= every) { cacheItem._t = now; return true; }
+    return false;
+  }
+
+  _skySignature(now) {
+    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
+    const qt = (time * 240) | 0;
+    return `t:${qt}`;
+  }
+
+  _starsSignature(now) {
+    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
+    const qt = (time * 180) | 0;
+    return `t:${qt}`;
+  }
+
+  _layerSignature(layerKey, now) {
+    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
+    const qt = (time * 180) | 0;
+
+    // if you drift noise by now, include a coarser drift phase:
+    const driftPhase = ((now * 0.00008) * 120) | 0;
+
+    // include settings that matter (frequency/panSpeed/baseHeight)
+    const layer = backgroundSettings[layerKey];
+    const f = layer.frequency ?? 0;
+    const p = layer.panSpeed ?? 0;
+    const b = layer.baseHeight ?? 0;
+
+    return `${layerKey}|t:${qt}|d:${driftPhase}|f:${f}|p:${p}|b:${b}`;
+  }
+
+  _renderSky(g, w, h, now) {
+    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
+    const dayFactor = 0.5 + 0.5 * Math.cos(time * Math.PI * 2);
+
     const topSkyColor = this.blendColors({
-        midnight: backgroundSettings.sky.colors.midnight.top,
-        noon: backgroundSettings.sky.colors.noon.top,
-        sunset: backgroundSettings.sky.colors.sunset.top
+      midnight: backgroundSettings.sky.colors.midnight.top,
+      noon: backgroundSettings.sky.colors.noon.top,
+      sunset: backgroundSettings.sky.colors.sunset.top
     }, dayFactor);
     const bottomSkyColor = this.blendColors({
-        midnight: backgroundSettings.sky.colors.midnight.bottom,
-        noon: backgroundSettings.sky.colors.noon.bottom,
-        sunset: backgroundSettings.sky.colors.sunset.bottom
+      midnight: backgroundSettings.sky.colors.midnight.bottom,
+      noon: backgroundSettings.sky.colors.noon.bottom,
+      sunset: backgroundSettings.sky.colors.sunset.bottom
     }, dayFactor);
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
+
+    const grad = g.createLinearGradient(0, 0, 0, h);
     grad.addColorStop(0, topSkyColor);
     grad.addColorStop(1, bottomSkyColor);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
-    const colorBlendFactor = dayFactor; 
-    const sunTimePhase = (time + 0.2) % 1
+    g.fillStyle = grad;
+    g.fillRect(0, 0, w, h);
+
     if (backgroundSettings.sun.enabled) {
-    ctx.filter = 'blur(3px)'
-        const sunColor = this.blendColors(backgroundSettings.sun.colors, colorBlendFactor);
-        ctx.fillStyle = sunColor;
-        const sunX = pivotPoint.x + Math.cos(sunAngle) * (w + timeSettings.sunPathHeight);
-        const sunY = pivotPoint.y + Math.sin(sunAngle) * (w + timeSettings.sunPathHeight);
-        const alphaBase = timeSettings.timeOpacities.day.sun ?? 1.0;
-        ctx.globalAlpha = alphaBase * ((dayFactor <= 0.5) ? (1 - dayFactor) / 0.5 : 1);
-        ctx.beginPath();
-        ctx.arc(sunX, sunY, timeSettings.sunSize, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.filter = 'none'
-    }
-    ctx.globalAlpha = 1.0;
-    if (backgroundSettings.stars.enabled) {        
-        const pan = (time * backgroundSettings.stars.panSpeed) % 1;
-        const alphaBase = timeSettings.timeOpacities.day.stars ?? 0.5;
-        ctx.fillStyle = this.blendColors(backgroundSettings.stars.colors, colorBlendFactor);
-        // ctx.globalAlpha = alphaBase * ((dayFactor >= 0.5) ? (1 - dayFactor) / 0.5 : 1);
-        for (let i=0; i < backgroundSettings.stars.frequency; i++) {
-            const winkle = 0.5 + 1.5 * Math.sin(time * Math.random() * 10);
-            const starX = starAngle * 100 + (noise1D(i * 0.9, 1234) + 1) * w  ;
-            const starY = starAngle * 1000 + (noise1D(i * 0.9, 4321) + 1) * h ;
-            const starSize = Math.max(0.5, noise1D(i * 0.1, 5557) * 1.5  * winkle);
-            ctx.beginPath();
-            ctx.arc(starX, starY, starSize, 0, Math.PI * 2);
-            ctx.fill();
-        }
-    }
-    ctx.globalAlpha = 1.0;
-    // ctx.filter = 'blur(3px)'
-    for (const layerKey of [ "mountains", "hills", "trees"]) {
-        const layer = backgroundSettings[layerKey];
-        if (!layer.enabled) continue;
-        const layerColor = this.blendColors(layer.colors, colorBlendFactor);
-        const newGrad = ctx.createLinearGradient(0,0,0,h)
-        newGrad.addColorStop(0, layerColor);
-        newGrad.addColorStop(1, 'black');
-        ctx.fillStyle = newGrad;
-        let opacity = timeSettings.timeOpacities.day[layerKey] ?? 0.5;
-        if (dayFactor >= 0.5) {
-        const t = (1 - dayFactor) / 0.5;
-        const nightOp = timeSettings.timeOpacities.night[layerKey] ?? 0.5;
-        opacity = timeSettings.timeOpacities.day[layerKey] + (nightOp - timeSettings.timeOpacities.day[layerKey]) * t;
-        }
-        const baseH = layer.baseHeight
-        // ctx.globalAlpha = opacity;
-        this.drawParallaxLayer(layerKey, layer.frequency, layer.panSpeed, w, h, baseH, now);
+      const pivotPoint = { x: 0, y: h };
+      const sunAngle = time * Math.PI * 2 - Math.PI / 2;
 
-    }
-    // ctx.filter = 'none'
+      g.save();
+      g.filter = "blur(3px)";
+      const sunColor = this.blendColors(backgroundSettings.sun.colors, dayFactor);
+      g.fillStyle = sunColor;
 
-  }
-  drawParallaxLayer(layerKey, frequency, panSpeed, w, h, baseH, now) {
-    this._buildParallaxPath(layerKey, frequency, panSpeed, w, h, baseH, now);
+      const sunX = pivotPoint.x + Math.cos(sunAngle) * (w + timeSettings.sunPathHeight);
+      const sunY = pivotPoint.y + Math.sin(sunAngle) * (w + timeSettings.sunPathHeight);
 
-    ctx.fill();
+      const alphaBase = timeSettings.timeOpacities.day.sun ?? 1.0;
+      g.globalAlpha = alphaBase * ((dayFactor <= 0.5) ? (1 - dayFactor) / 0.5 : 1);
 
-    ctx.save();
-    ctx.clip();
-
-    const prevFilter = ctx.filter;
-    ctx.filter = "none";
-
-    const strength =
-        layerKey === "mountains" ? 0.22 :
-        layerKey === "hills"     ? 0.16 :
-        0.12;
-
-    const scale =
-        layerKey === "mountains" ? 0.010 :
-        layerKey === "hills"     ? 0.014 :
-        0.018;
-
-    this._drawMaterialNoise(w, h, now, { strength, scale, mode: "multiply" });
-
-    ctx.filter = prevFilter;
-    ctx.restore();
-  }
-_drawMaterialNoise(w, h, now, opts = {}) {
-  const {
-    strength = 0.08,
-    scale = 0.32, 
-    tile = 6,
-    mode = "multiply",  
-    drift = 18  
-  } = opts;
-  const prevComp = ctx.globalCompositeOperation;
-  const prevAlpha = ctx.globalAlpha;
-
-  ctx.globalCompositeOperation = mode;
-  ctx.globalAlpha = strength;
-  const ox = now * 0.001 * drift;
-  const oy = now * 0.001 * (drift * 0.6);
-  for (let y = 0; y < h; y += tile) {
-    for (let x = 0; x < w; x += tile) {
-      const n = (noise2D((x + ox) * scale, (y + oy) * scale) + 1) * 0.5;
-      const v = n * n * (3 - 2 * n); // smoothstep
-
-      ctx.fillStyle = `rgba(0,0,0,${0.55 * v})`;
-      ctx.fillRect(x, y, tile, tile);
+      g.beginPath();
+      g.arc(sunX, sunY, timeSettings.sunSize, 0, Math.PI * 2);
+      g.fill();
+      g.restore();
     }
   }
 
-  ctx.globalAlpha = prevAlpha;
-  ctx.globalCompositeOperation = prevComp;
-}
-_buildParallaxPath(layerKey, frequency, panSpeed, w, h, baseH) {
-  const offset = (panSpeed * 0.5) % w;
-  ctx.beginPath();
-  let y = h * 0.6 * baseH;
-
-  for (let x = -w; x < w * 2; x += 10) {
-    const noiseVal = noise2D((x + offset) * frequency, layerKey.charCodeAt(0));
-    const waveY = y + noiseVal * 20;
-    if (x === -w) ctx.moveTo(x, waveY);
-    else ctx.lineTo(x, waveY);
-  }
-
-  ctx.lineTo(w * 2, h);
-  ctx.lineTo(-w, h);
-  ctx.closePath();
-}
-
-_makeGrainCanvas(size = 128, density = 0.12) {
-  const c = document.createElement("canvas");
-  c.width = c.height = size;
-  const g = c.getContext("2d");
-
-  // transparent background; draw light/dark specks
-  const img = g.createImageData(size, size);
-  const data = img.data;
-
-  for (let i = 0; i < data.length; i += 4) {
-    if (Math.random() > density) { data[i+3] = 0; continue; } // mostly transparent
-    const v = (Math.random() < 0.5) ? 0 : 255;               // black or white speck
-    data[i] = v; data[i+1] = v; data[i+2] = v;
-    data[i+3] = 20 + (Math.random() * 35) | 0;               // low alpha
-  }
-  g.putImageData(img, 0, 0);
-  return c;
-}
-
-_ensureGrain() {
-  if (!this._grain) this._grain = this._makeGrainCanvas(128, 0.10);
-}
-
-_drawGrainClipped(w, h, strength = 0.12, scale = 1.0) {
-  this._ensureGrain();
-
-  ctx.save();
-  ctx.globalAlpha = strength;
-
-  // "overlay" gives contrasty grain; fallback to normal if unsupported
-  const prevComp = ctx.globalCompositeOperation;
-  ctx.globalCompositeOperation = "overlay";
-
-  const tile = this._grain;
-  const tw = tile.width * scale;
-  const th = tile.height * scale;
-
-  // random-ish offset so it doesn't look tiled/stationary
-  const ox = (Math.random() * tw) | 0;
-  const oy = (Math.random() * th) | 0;
-
-  for (let y = -th; y < h + th; y += th) {
-    for (let x = -tw; x < w + tw; x += tw) {
-      ctx.drawImage(tile, x - ox, y - oy, tw, th);
+  _renderStars(g, w, h, now) {
+    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
+    const dayFactor = 0.5 + 0.5 * Math.cos(time * Math.PI * 2);
+    const colorBlendFactor = dayFactor;
+    w += globalSceneControl.starPan.x;
+    h += globalSceneControl.starPan.y;
+    const starAngle = (time * backgroundSettings.stars.panSpeed * Math.PI * 2) % (Math.PI * 2);
+    g.fillStyle = this.blendColors(backgroundSettings.stars.colors, colorBlendFactor);
+    const count = backgroundSettings.stars.frequency | 0;
+    for (let i = 0; i < count; i++) {
+      const starX = starAngle * 100 + (noise1D(i * 0.9, 1234) + 1) * w;
+      const starY = starAngle * 1000 + (noise1D(i * 0.9, 4321) + 1) * h;
+      const tw = 0.5 + 0.5 * Math.sin(time * 10 + i * 0.7);
+      const starSize = Math.max(0.5, (noise1D(i * 0.1, 5557) * 1.5) * (0.6 + 1.0 * tw));
+      g.beginPath();
+      g.arc(starX, starY, starSize, 0, Math.PI * 2);
+      g.fill();
     }
   }
+  _renderLayer(g, layerKey, w, h, now) {
+    const layer = backgroundSettings[layerKey];
 
-  ctx.globalCompositeOperation = prevComp;
-  ctx.restore();
-}   
+    const time = (now * timeSettings.dayNightCycleSpeed) % 1;
+    const dayFactor = 0.5 + 0.5 * Math.cos(time * Math.PI * 2);
+    const layerColor = this.blendColors(layer.colors, dayFactor);
+
+    const newGrad = g.createLinearGradient(0, 0, 0, h);
+    newGrad.addColorStop(0, layerColor);
+    newGrad.addColorStop(1, "black");
+    g.fillStyle = newGrad;
+
+    // Build + fill silhouette path
+    this._buildParallaxPathInto(g, layerKey, layer.frequency, layer.panSpeed, w, h, layer.baseHeight);
+    g.fill();
+
+    // Clip + overlay material (cheap version: stamp pre-baked blob tile)
+    g.save();
+    g.clip();
+
+    const strength = layerKey === "mountains" ? 0.22 : layerKey === "hills" ? 0.16 : 0.12;
+    const scale    = layerKey === "mountains" ? 2.2  : layerKey === "hills" ? 1.7  : 1.3;
+    this._drawBlobOverlayInto(g, w, h, now, strength, scale, "multiply");
+
+    g.restore();
+  }
+
+  _buildParallaxPathInto(g, layerKey, frequency, panSpeed, w, h, baseH) {
+    const offset = (panSpeed * 0.5) % w;
+    g.beginPath();
+    let y = h * 0.6 * baseH;
+
+    for (let x = -w; x < w * 2; x += 10) {
+      const noiseVal = noise2D((x + offset) * frequency, layerKey.charCodeAt(0));
+      const waveY = y + noiseVal * 20;
+      if (x === -w) g.moveTo(x, waveY);
+      else g.lineTo(x, waveY);
+    }
+
+    g.lineTo(w * 2, h);
+    g.lineTo(-w, h);
+    g.closePath();
+  }
+
+  _ensureBlobNoise() {
+    if (this._blob) return;
+    const s = 192;
+    const c = document.createElement("canvas");
+    c.width = c.height = s;
+    const g = c.getContext("2d");
+
+    for (let i = 0; i < 220; i++) {
+      const x = Math.random() * s;
+      const y = Math.random() * s;
+      const r = 8 + Math.random() * 28;
+
+      const grad = g.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, "rgba(0,0,0,0.22)");
+      grad.addColorStop(1, "rgba(0,0,0,0)");
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(x, y, r, 0, Math.PI * 2);
+      g.fill();
+    }
+
+    this._blob = c;
+  }
+
+  _drawBlobOverlayInto(g, w, h, now, strength = 0.18, scale = 1.0, mode = "multiply") {
+    this._ensureBlobNoise();
+    const tile = this._blob;
+
+    const tw = tile.width * scale;
+    const th = tile.height * scale;
+
+    const t = (now ?? 0) * 0.00008;
+    const ox = (Math.cos(t) * tw) | 0;
+    const oy = (Math.sin(t * 1.3) * th) | 0;
+
+    const prevComp = g.globalCompositeOperation;
+    const prevAlpha = g.globalAlpha;
+
+    g.globalCompositeOperation = mode;
+    g.globalAlpha = strength;
+
+    for (let y = -th; y < h + th; y += th) {
+      for (let x = -tw; x < w + tw; x += tw) {
+        g.drawImage(tile, x - ox, y - oy, tw, th);
+      }
+    }
+
+    g.globalAlpha = prevAlpha;
+    g.globalCompositeOperation = prevComp;
+  }
 
   blendColors(colors, factor) {
     const day = hexToRgb(colors.noon);
@@ -1092,7 +1230,6 @@ _drawGrainClipped(w, h, strength = 0.12, scale = 1.0) {
     }
   }
 }
-
 class Entity {
   constructor(wx, wy, clickable = false, radius = 0) {
     this.wx = wx;
@@ -1501,7 +1638,7 @@ class MessageBox extends Entity {
     this.minW = 360;
     this.pad = 18;
     this.corner = 16;
-
+    this.opacity = 1
 
     this.y = 0.16;
     this.h = 120; 
@@ -1594,6 +1731,17 @@ class BouquetEntity extends Entity {
       this.wy = Math.floor(mw.wy / blockSize) * blockSize + blockSize / 2;
     }
   }
+}
+class ImgEntity extends Entity {
+    constructor(wx, wy, clickable, radius, ImgSrc, size){
+    super(wx, wy, clickable, radius);
+        this.type = "externalImg"
+        this.z = 0;
+        this.src = ImgSrc;
+        this.size = size;
+    }
+    update(dt, scene){
+    }
 }
 class CustomSpawner{
     constructor(scene, definition){
@@ -1698,7 +1846,6 @@ class Scene {
   }
   handleClick(player) {
     const { wx, wy } = player.mouseWorld();
-
     const tool = player.tools.currentTool();
     if (tool?.name !== "Hand") {
         player.tools.useCurrentTool(this);
@@ -1708,43 +1855,35 @@ class Scene {
     for (const ent of this.entities) {
         if (!ent.clickable) continue;
         if (!ent.hitTest?.(wx, wy)) continue;
-
         if (!best) best = ent;
         else {
         if ((ent.z ?? 0) > (best.z ?? 0)) best = ent;
         else if ((ent.z ?? 0) === (best.z ?? 0) && (ent.wy ?? 0) > (best.wy ?? 0)) best = ent;
         }
     }
-
     if (best) best.interaction?.(this, player);
   }
-    startMessages(messages) {
+  startMessages(messages) {
     this.messageQueue = messages.slice();
     this._messageIndex = 0;
     this._showCurrentMessage();
-    }
-
-    _showCurrentMessage() {
+  }
+  _showCurrentMessage() {
     const m = this.messageQueue[this._messageIndex];
     const text = (typeof m === "string") ? m : (m?.text ?? "");
     const speed = (typeof m === "object" && m?.speed != null) ? m.speed : 40;
     this.MSG.show(text, { speed });
     if (typeof m === "object" && m?.onShow) m.onShow(this);
-    }
-
-    advanceMessage({ hideOnDone = false } = {}) {
+  }
+  advanceMessage({ hideOnDone = false } = {}) {
     if (!this.MSG.visible) return;
-
     if (!this.MSG.done) { this.MSG.advance({ hideOnDone }); return; }
-
     const m = this.messageQueue[this._messageIndex];
     if (typeof m === "object" && m?.onDone) m.onDone(this);
-
     this._messageIndex++;
     if (this._messageIndex < this.messageQueue.length) this._showCurrentMessage();
     else this.MSG.visible = false;
-    }
-
+  }
   getBlockAt(wx, wy) { return this.world.getBlockAt(wx, wy); }
   placeBlockAt(wx, wy, type) { this.world.setBlockAt(wx, wy, type); }
   removeBlockAt(wx, wy) { this.world.removeBlockAt(wx, wy); }
@@ -1764,14 +1903,13 @@ class Scene {
         this.advanceMessage({ hideOnDone: true });
     }
     const tool = sm.player.tools.currentTool();
-
     if (player.mouse.clicked) {
     if (this.MSG.visible) {
         this.advanceMessage({ hideOnDone: true });
     } else {
         if (tool?.name === "Hand") this.handleClick(player);
         else tool?.onClick?.(this, player);
-    }
+      }
     }
     if (!this.MSG.visible && player.mouse.down) {
     tool?.onHold?.(this, player, dt);
@@ -1819,10 +1957,7 @@ class ValentineScene extends Scene {
             "hello", "aaa"
         ];
         this.spawners.push(new CustomSpawner(this, {type:"lineOfBigFlowers", wx:100, wy:100}));
-
-        // optional timer
         this.heartRain = { active: true, every: 0.18, acc: 0 };
-
     }
     onEnter(sm, player, payload = {}) {
         super.onEnter(sm, player, payload);
@@ -1835,27 +1970,21 @@ class ValentineScene extends Scene {
         if (chunk) chunk.decorate((ent)=>this.entities.add(ent), 70,70,2)
         const msgs = payload.messages?.length ? payload.messages : this.defaultMessages;
         if (msgs?.length) this.startMessages(msgs);
-        
-        
     }
     update(sm, dt) {
         super.update(sm, dt);
         // if (this.MSG?.visible) return;
         const camera = sm.player.camera;
+        // this.panStars({x:Math.random(), y:Math.random()})
         this._autoExplodeBigFlowers(sm, dt);
-
         sm.state.heartTimer = (sm.state.heartTimer ?? 0) + dt;
-
         const every = 0.12;
         while (sm.state.heartTimer > every) {
             sm.state.heartTimer -= every;
-
             const cx = (Math.random() - 0.5) * 700 + camera.x + canvas.width / 2;
             const cy = (Math.random() - 0.5) * 400 + camera.y + canvas.height * 0.5;
-
             const vx = (Math.random() - 0.5) * 120;
             const vy = -60 - Math.random() * 120;
-
             this.entities.add(
             new FloatingHeart(cx, cy, {
                 vx, vy,
@@ -1866,7 +1995,6 @@ class ValentineScene extends Scene {
             );
         }
     }
-
     _autoExplodeBigFlowers(sm,dt){
         const ap = this.autoPop;
         if (!ap.active) return
@@ -1918,8 +2046,16 @@ class ValentineScene extends Scene {
         this.autoPop.noneLeft = false;
         this.autoPop.renew = false;
     }
-
+    panStars(velocity){
+        globalSceneControl.starPan.x += velocity.x;
+        globalSceneControl.starPan.y += velocity.y;
+    }
 }
+
+const catImg = new Image();
+catImg.src = "/cat.jpg"
+const flowerImg = new Image();
+flowerImg.src = "/flower.jpg"
 
 let lastTime = 0;
 let now = 0;
