@@ -4,7 +4,10 @@ const ctx = canvas.getContext("2d");
 const blockSize = 8;
 const chunkSize = 10;
 const globalSceneControl = {
-    time: 37000,
+    time: 79000,
+}
+let EmergencyGlobals = {
+    sm: null, player: null, scene: null
 }
 const backgroundSettings = {
   hills: { enabled: true, frequency: 0.01, 
@@ -26,7 +29,7 @@ const backgroundSettings = {
 };
 const timeSettings = {
     dayColorTransition: 0.1, 
-    dayNightCycleSpeed: 0.00001, 
+    dayNightCycleSpeed: 0.000005, 
     sunSize: 50, // radius of the sun
     sunPathHeight: 150, // how high the sun arcs in the sky
     timeOpacities: {
@@ -327,7 +330,8 @@ class Player {
       this.mouse.sy = e.clientY - r.top;
     });
     c.addEventListener("mousedown", () => { this.mouse.down = true; this.mouse.clicked = true; });
-    window.addEventListener("mouseup", () => { this.mouse.down = false; });    window.addEventListener("keydown", (e) => {
+    window.addEventListener("mouseup", () => { this.mouse.down = false; this.mouse.released = true; });
+    window.addEventListener("keydown", (e) => {
       if (!this.input.down[e.key]) this.input.pressed[e.key] = true;
       this.input.down[e.key] = true;
     });
@@ -340,6 +344,7 @@ class Player {
     this.input.pressed = Object.create(null);
     this.input.released = Object.create(null);
     this.mouse.clicked = false;
+    this.mouse.released = false;
   }
   isDown(key) { return !!this.input.down[key]; }
   wasPressed(key) { return !!this.input.pressed[key]; }
@@ -392,41 +397,98 @@ class Toolbelt {
   constructor(player) {
     this.player = player;
     this.toolIndex = 0;
-    this.tools = {
-      0: { name: "Hand", action: (scene) => {
-      const { wx, wy } = this.player.mouseWorld();
-      for (const ent of scene.clickables) {
-        if (ent.hitTest(wx, wy)) { ent.interaction?.(scene, this.player); break; }
+    this._acc = Object.create(null);
+    const rateGate = (name, dt, everySec) => {
+      if (!everySec || everySec <= 0) return true;
+      this._acc[name] = (this._acc[name] ?? 0) + dt;
+      if (this._acc[name] >= everySec) {
+        this._acc[name] = 0;
+        return true;
       }
-      }},
-      1: { name: "Shovel", action: (scene) => {
-        const { wx, wy } = this.player.mouseWorld();
-        const block = scene.getBlockAt(wx, wy);
-        if (block) { scene.removeBlockAt(wx, wy); this.player.invAdd(block.type, 1); }
-      }},
-      2: { name: "Placer", action: (scene) => {
-        const { wx, wy } = this.player.mouseWorld();
-        const type = this.player.inventory.placeIndex;
-        if (type <= 0) return;
-        if (this.player.invGet(type) <= 0) return;
-        // only place into empty
-        if (scene.getBlockAt(wx, wy)) return;
-        scene.placeBlockAt(wx, wy, type);
-        this.player.invSpend(type, 1);
-      }},
-      3: { name: "HeartWand", action: (scene) => {
-        const { wx, wy } = this.player.mouseWorld();
-        scene.addEntity(new HeartEntity(wx, wy));
-        const vx = (Math.random() - 0.5) * 380;
-        const vy = (Math.random() - 0.5) * 380;
-        scene.addEntity(new FloatingHeart(wx, wy, { vx, vy, life: 2.8 + Math.random() * 1.2 }))
-      }}
+      return false;
+    };
+
+    this.tools = {
+      0: {
+        name: "Hand",
+        onClick: null,
+        onHold: null,
+        onRelease: null
+      },
+      1: {
+        name: "Shovel",
+        every: 0.06,
+        onClick: (scene, player) => this._digOne(scene, player),
+        onHold: (scene, player, dt) => {
+          if (!rateGate("Shovel", dt, this.tools[1].every)) return;
+          this._digOne(scene, player);
+        }
+      },
+      2: {
+        name: "Placer",
+        every: 0.04,
+        onClick: (scene, player) => this._placeOne(scene, player),
+        onHold: (scene, player, dt) => {
+          if (!rateGate("Placer", dt, this.tools[2].every)) return;
+          this._placeOne(scene, player);
+        }
+      },
+      3: {
+        name: "HeartWand",
+        every: 0.08,
+        onClick: (scene, player) => this._castHearts(scene, player, /*big*/true),
+        onHold: (scene, player, dt) => {
+          if (!rateGate("HeartWand", dt, this.tools[3].every)) return;
+          this._castHearts(scene, player, /*big*/false);
+        }
+      }
     };
   }
-  isCurrentTool(name) { return this.currentTool().name === name; }
   currentTool() { return this.tools[this.toolIndex] ?? this.tools[0]; }
-  useCurrentTool(scene) { this.currentTool().action?.(scene); }
+  isCurrentTool(name) { return this.currentTool().name === name; }
+  _digOne(scene, player) {
+    const { wx, wy } = player.mouseWorld();
+    const block = scene.getBlockAt(wx, wy);
+    if (!block) return;
+    scene.removeBlockAt(wx, wy);
+    player.invAdd(block.type, 1);
+  }
+  _placeOne(scene, player) {
+    const { wx, wy } = player.mouseWorld();
+    const type = player.inventory.placeIndex;
+    if (type <= 0) return;
+    if (player.invGet(type) <= 0) return;
+    if (scene.getBlockAt(wx, wy)) return;
+    scene.placeBlockAt(wx, wy, type);
+    player.invSpend(type, 1);
+  }
+
+  _castHearts(scene, player, big) {
+    const { wx, wy } = player.mouseWorld();
+    const burst = big ? 1 : 0;
+
+    scene.addEntity(new HeartEntity(wx, wy));
+    const vx = (Math.random() - 0.5) * (big ? 520 : 240);
+    const vy = (Math.random() - 0.5) * (big ? 520 : 240);
+    scene.addEntity(new FloatingHeart(wx, wy, {
+      vx,
+      vy,
+      life: big ? (2.8 + Math.random() * 1.2) : (1.6 + Math.random() * 0.6)
+    }));
+
+    if (burst) {
+      for (let i = 0; i < 6; i++) {
+        const a = (Math.PI * 2 * i) / 6;
+        const hvx = Math.cos(a) * 120;
+        const hvy = Math.sin(a) * 120;
+        const h = new HeartEntity(wx, wy);
+        h.vx = hvx; h.vy = hvy;
+        scene.addEntity(h);
+      }
+    }
+  }
 }
+
 class Drawer {
   constructor(camera, canvas, sm) {
     this.camera = camera;
@@ -488,7 +550,7 @@ class Drawer {
         }
     }
     ctx.globalAlpha = 1.0;
-    ctx.filter = 'blur(3px)'
+    // ctx.filter = 'blur(3px)'
     for (const layerKey of [ "mountains", "hills", "trees"]) {
         const layer = backgroundSettings[layerKey];
         if (!layer.enabled) continue;
@@ -505,28 +567,134 @@ class Drawer {
         }
         const baseH = layer.baseHeight
         // ctx.globalAlpha = opacity;
-        
-        this.drawParallaxLayer(layerKey, layer.frequency, layer.panSpeed, w, h, baseH);
+        this.drawParallaxLayer(layerKey, layer.frequency, layer.panSpeed, w, h, baseH, now);
+
     }
-    ctx.filter = 'none'
+    // ctx.filter = 'none'
 
   }
-  drawParallaxLayer(layerKey, frequency, panSpeed, w, h, baseH) {
-    const offset = ( panSpeed * 0.5) % w;
-    ctx.beginPath();
-    let y = h * 0.6 * baseH;    
-    for (let x = -w; x < w * 2; x += 10) {
-        const noiseVal = noise2D((x + offset) * frequency, layerKey.charCodeAt(0));
-        const waveY = y + noiseVal * 20;
-        if (x === -w) ctx.moveTo(x, waveY);
-        else ctx.lineTo(x, waveY);
-    }
-    ctx.lineTo(w * 2, h);
-    ctx.lineTo(-w, h);
-    ctx.closePath();
-    
+  drawParallaxLayer(layerKey, frequency, panSpeed, w, h, baseH, now) {
+    this._buildParallaxPath(layerKey, frequency, panSpeed, w, h, baseH, now);
+
     ctx.fill();
+
+    ctx.save();
+    ctx.clip();
+
+    const prevFilter = ctx.filter;
+    ctx.filter = "none";
+
+    const strength =
+        layerKey === "mountains" ? 0.22 :
+        layerKey === "hills"     ? 0.16 :
+        0.12;
+
+    const scale =
+        layerKey === "mountains" ? 0.010 :
+        layerKey === "hills"     ? 0.014 :
+        0.018;
+
+    this._drawMaterialNoise(w, h, now, { strength, scale, mode: "multiply" });
+
+    ctx.filter = prevFilter;
+    ctx.restore();
   }
+_drawMaterialNoise(w, h, now, opts = {}) {
+  const {
+    strength = 0.08,
+    scale = 0.32, 
+    tile = 6,
+    mode = "multiply",  
+    drift = 18  
+  } = opts;
+  const prevComp = ctx.globalCompositeOperation;
+  const prevAlpha = ctx.globalAlpha;
+
+  ctx.globalCompositeOperation = mode;
+  ctx.globalAlpha = strength;
+  const ox = now * 0.001 * drift;
+  const oy = now * 0.001 * (drift * 0.6);
+  for (let y = 0; y < h; y += tile) {
+    for (let x = 0; x < w; x += tile) {
+      const n = (noise2D((x + ox) * scale, (y + oy) * scale) + 1) * 0.5;
+      const v = n * n * (3 - 2 * n); // smoothstep
+
+      ctx.fillStyle = `rgba(0,0,0,${0.55 * v})`;
+      ctx.fillRect(x, y, tile, tile);
+    }
+  }
+
+  ctx.globalAlpha = prevAlpha;
+  ctx.globalCompositeOperation = prevComp;
+}
+_buildParallaxPath(layerKey, frequency, panSpeed, w, h, baseH) {
+  const offset = (panSpeed * 0.5) % w;
+  ctx.beginPath();
+  let y = h * 0.6 * baseH;
+
+  for (let x = -w; x < w * 2; x += 10) {
+    const noiseVal = noise2D((x + offset) * frequency, layerKey.charCodeAt(0));
+    const waveY = y + noiseVal * 20;
+    if (x === -w) ctx.moveTo(x, waveY);
+    else ctx.lineTo(x, waveY);
+  }
+
+  ctx.lineTo(w * 2, h);
+  ctx.lineTo(-w, h);
+  ctx.closePath();
+}
+
+_makeGrainCanvas(size = 128, density = 0.12) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+
+  // transparent background; draw light/dark specks
+  const img = g.createImageData(size, size);
+  const data = img.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    if (Math.random() > density) { data[i+3] = 0; continue; } // mostly transparent
+    const v = (Math.random() < 0.5) ? 0 : 255;               // black or white speck
+    data[i] = v; data[i+1] = v; data[i+2] = v;
+    data[i+3] = 20 + (Math.random() * 35) | 0;               // low alpha
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+_ensureGrain() {
+  if (!this._grain) this._grain = this._makeGrainCanvas(128, 0.10);
+}
+
+_drawGrainClipped(w, h, strength = 0.12, scale = 1.0) {
+  this._ensureGrain();
+
+  ctx.save();
+  ctx.globalAlpha = strength;
+
+  // "overlay" gives contrasty grain; fallback to normal if unsupported
+  const prevComp = ctx.globalCompositeOperation;
+  ctx.globalCompositeOperation = "overlay";
+
+  const tile = this._grain;
+  const tw = tile.width * scale;
+  const th = tile.height * scale;
+
+  // random-ish offset so it doesn't look tiled/stationary
+  const ox = (Math.random() * tw) | 0;
+  const oy = (Math.random() * th) | 0;
+
+  for (let y = -th; y < h + th; y += th) {
+    for (let x = -tw; x < w + tw; x += tw) {
+      ctx.drawImage(tile, x - ox, y - oy, tw, th);
+    }
+  }
+
+  ctx.globalCompositeOperation = prevComp;
+  ctx.restore();
+}   
+
   blendColors(colors, factor) {
     const day = hexToRgb(colors.noon);
     const night = hexToRgb(colors.midnight);
@@ -647,6 +815,7 @@ class Drawer {
     this.drawBouquetGhost(x, y, bouquet.flowers, { alpha: 1.0, maxStems: bouquet.flowers.length, fan: 0.9, stemLen: 34, headR: 7 });
   }
   drawBigFlower(camera, bigFlower) {
+    ctx.save()
     ctx.lineCap = "round";
     ctx.strokeStyle = "#2e8b57";
     const segCountTotal = Math.max(0, bigFlower.nodes.length - 1);
@@ -744,7 +913,7 @@ class Drawer {
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.font = "13px system-ui, sans-serif";
       ctx.textBaseline = "alphabetic";
-      ctx.fillText("click / space", x + bw / 2, y + bh - 14);
+      ctx.fillText(" x ", x + bw / 2, y + bh - 14);
     }
     ctx.restore();
   }
@@ -825,6 +994,13 @@ class Drawer {
         );
         ctx.fill();
     }
+    if (shapeId === "circle") {
+        ctx.beginPath();
+        ctx.arc(0, 0, scale * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        return;
+    }
+
   }
   drawFlowerStamp(f, opts = {}) {
     const {
@@ -856,7 +1032,7 @@ class Drawer {
   drawBouquetGhost(sx, sy, flowers, opts = {}) {
     const {
         maxStems = 7,
-        fan = 0.55,
+        fan = 0.55 ,
         stemLen = 26,
         stemW = 3,
         headR = 6,
@@ -865,23 +1041,20 @@ class Drawer {
     } = opts;
 
     if (!flowers || flowers.length === 0) return;
-
     const n = Math.min(maxStems, flowers.length);
     const start = flowers.length - n;
-
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(sx, sy + offsetY);
-
     for (let i = 0; i < n; i++) {
         const f = flowers[start + i];
         const t = (n === 1) ? 0.5 : i / (n - 1);
         const ang = (t - 0.5) * fan;
+        const dirX = Math.sin(ang);
+        const dirY = -Math.cos(ang);
 
-        const tipX = Math.cos(ang) * 10;
-        const tipY = -stemLen + Math.sin(ang) * 4;
-
-        // stem
+        const tipX = dirX * stemLen;
+        const tipY = dirY * stemLen;
         ctx.save();
         ctx.strokeStyle = "#2e8b57";
         ctx.lineWidth = stemW;
@@ -891,7 +1064,6 @@ class Drawer {
         ctx.stroke();
         ctx.restore();
 
-        // head
         ctx.save();
         ctx.translate(tipX, tipY);
         this.drawFlowerStamp(f, { headR, centerR: Math.max(2, headR * 0.35) });
@@ -954,6 +1126,7 @@ class FloatingHeart extends Entity {
     this.radius = opts.radius ?? 18; 
     this.dragStrength = opts.dragStrength ?? 14;
     this.attractStrength = opts.attractStrength ?? 6;
+    this.scale = 1;
 
     this._held = false;
     this._holdDx = 0;
@@ -1072,20 +1245,21 @@ class FlowerEntity extends Entity {
     };
   }
   interaction(scene, player) {
-    if (player.tools.isCurrentTool("Hand")){
-        player.inventory.flowers.push(this.exportDrawData());
-        player.invAdd(4,1)
-        // if (player.bouquetPreview.enabled) {
-        //   if (player.heldBouquet) {
-        //     player.heldBouquet.flowers = player.inventory.flowers.slice();
-        //   } else {
-        //     const bouquet = new BouquetEntity(this.tx, this.ty, player.inventory.flowers.slice());
-        //     bouquet.initAsHeld();
-        //     player.heldBouquet = bouquet;
-        //     scene.entities.add(bouquet);
-        //   }
-        // }
-        // scene.entities.delete(this);
+  if (player.tools.isCurrentTool("Hand")) {
+    player.inventory.flowers.push(this.exportDrawData());
+
+    if (player.bouquetPreview.enabled) {
+      if (player.heldBouquet) {
+        player.heldBouquet.flowers = player.inventory.flowers.slice();
+      } else {
+        const bouquet = new BouquetEntity(this.tx, this.ty, player.inventory.flowers.slice());
+        bouquet.initAsHeld();
+        player.heldBouquet = bouquet;
+        scene.entities.add(bouquet);
+      }
+    }
+
+    scene.entities.delete(this); // optional but usually desired
 
     } else if (player.tools.isCurrentTool("HeartWand")){
       //multiple hearts spawn outwards
@@ -1316,7 +1490,7 @@ class MessageBox extends Entity {
     this.z = 100;
     this.type = "messageBox";
 
-    this.visible = true;
+    this.visible = false;
     this.text = text;
     this.typed = 0;
     this.timer = 0;
@@ -1328,7 +1502,8 @@ class MessageBox extends Entity {
     this.pad = 18;
     this.corner = 16;
 
-    this.y = 0.26;
+
+    this.y = 0.16;
     this.h = 120; 
   }
   show(text, opts = {}) {
@@ -1401,6 +1576,8 @@ class BouquetEntity extends Entity {
     this.flowers = flowers;
     this.isbeingheld = false;
     this.z = 6;
+    this.sm = null
+    this.type = "bouquet"
   }
   initAsHeld() {
     this.isbeingheld = true;
@@ -1412,7 +1589,7 @@ class BouquetEntity extends Entity {
   }
   update(dt, scene){
     if (this.isbeingheld) {
-      const mw = SM.player.mouseWorld();
+      const mw = EmergencyGlobals.sm.player.mouseWorld();
       this.wx = Math.floor(mw.wx / blockSize) * blockSize + blockSize / 2;
       this.wy = Math.floor(mw.wy / blockSize) * blockSize + blockSize / 2;
     }
@@ -1433,18 +1610,43 @@ class CustomSpawner{
             const ent = new entType(this.def.wx, this.def.wy);
             ent.vx = vx;
             ent.vy = vy;
+            if ("radius" in ent) ent.radius = diameter / 2;
             this.scene.entities.add(ent);
         }
     }
-    lineOfBigFlowers(amt, spacing, pos, length){
-        for (let i = 0; i < amt; i++){
-            const wx = this.def.wx + (i - (amt-1)/2) * spacing;
-            const wy = this.def.wy;
-            const flower = new BigFlower(wx, wy, hash2i(wx, wy, 12345));
+    lineOfBigFlowers(amt, spacing, pos) {
+        const baseX = pos?.wx ?? this.def.wx;
+        const baseY = pos?.wy ?? this.def.wy;
+        for (let i = 0; i < amt; i++) {
+            const wx = baseX + (i - (amt - 1) / 2) * spacing;
+            const wy = baseY;
+            const flower = new BigFlower(wx, wy, hash2i((wx / blockSize) | 0, (wy / blockSize) | 0, 12345));
             flower.delay = i * 0.3;
             this.scene.entities.add(flower);
         }
     }
+    randomFloatingHearts(amt, velocity, diameter, pos){
+        for(let i = 0; i < amt; i++){
+            const angle = Math.random() * Math.PI * 2;
+            const vx = Math.cos(angle) * velocity;
+            const vy = Math.sin(angle) * velocity;
+            const ent = new FloatingHeart(pos?.wx ?? this.def.wx, pos?.wy ?? this.def.wy, { vx, vy, radius: diameter / 2 });
+            this.scene.entities.add(ent);
+        }
+    }
+    randomFloatingHeartsUpwards(amt, speed, diameter, pos) {
+        for (let i = 0; i < amt; i++) {
+            const ang = (-Math.PI / 2) + (Math.random() - 0.5) * (Math.PI * 0.6); // upward cone
+            const vx = Math.cos(ang) * speed * (0.4 + Math.random() * 0.6);
+            const vy = Math.sin(ang) * speed * (0.7 + Math.random() * 0.6);
+            this.scene.entities.add(new FloatingHeart(
+            pos?.wx ?? this.def.wx,
+            pos?.wy ?? this.def.wy,
+            { vx, vy, radius: diameter / 2, life: 1.8 + Math.random() * 1.2, clickable: false }
+            ));
+        }
+    }
+
     update(dt, sm){
         if (!this.needed) return;
         switch(this.def.type){
@@ -1457,7 +1659,12 @@ class CustomSpawner{
                 break;
             }
             case "lineOfBigFlowers": {
-                this.lineOfBigFlowers(7, 48, {wx: this.def.wx, wy: this.def.wy}, 120);
+                this.lineOfBigFlowers(7, 48, {wx: this.def.wx, wy: this.def.wy});
+                break;
+            }
+            case "randomFloatingHeartsUpwards": {
+                this.randomFloatingHearts(16, 40, 12);
+                break;
             }
         }
         this.needed = false;
@@ -1491,29 +1698,53 @@ class Scene {
   }
   handleClick(player) {
     const { wx, wy } = player.mouseWorld();
-    player.tools.useCurrentTool(this)
-    // for (const ent of this.clickables) {
-    //   if (ent.hitTest(wx, wy)) { ent.interaction?.(this, player); break; }
-    // }
+
+    const tool = player.tools.currentTool();
+    if (tool?.name !== "Hand") {
+        player.tools.useCurrentTool(this);
+        return;
+    }
+    let best = null;
+    for (const ent of this.entities) {
+        if (!ent.clickable) continue;
+        if (!ent.hitTest?.(wx, wy)) continue;
+
+        if (!best) best = ent;
+        else {
+        if ((ent.z ?? 0) > (best.z ?? 0)) best = ent;
+        else if ((ent.z ?? 0) === (best.z ?? 0) && (ent.wy ?? 0) > (best.wy ?? 0)) best = ent;
+        }
+    }
+
+    if (best) best.interaction?.(this, player);
   }
-  startMessages(messages) {
-    this.messageQueue = messages.slice(); // copy
+    startMessages(messages) {
+    this.messageQueue = messages.slice();
     this._messageIndex = 0;
-    this.MSG.show(this.messageQueue[this._messageIndex], {speed: 40});
-  }
-  advanceMessage({hideOnDone = false} = {}) {
+    this._showCurrentMessage();
+    }
+
+    _showCurrentMessage() {
+    const m = this.messageQueue[this._messageIndex];
+    const text = (typeof m === "string") ? m : (m?.text ?? "");
+    const speed = (typeof m === "object" && m?.speed != null) ? m.speed : 40;
+    this.MSG.show(text, { speed });
+    if (typeof m === "object" && m?.onShow) m.onShow(this);
+    }
+
+    advanceMessage({ hideOnDone = false } = {}) {
     if (!this.MSG.visible) return;
-    if (!this.MSG.done) {
-      this.MSG.advance({ hideOnDone });
-      return;
-    }
+
+    if (!this.MSG.done) { this.MSG.advance({ hideOnDone }); return; }
+
+    const m = this.messageQueue[this._messageIndex];
+    if (typeof m === "object" && m?.onDone) m.onDone(this);
+
     this._messageIndex++;
-    if (this._messageIndex < this.messageQueue.length) {
-      this.MSG.show(this.messageQueue[this._messageIndex], {speed: 40});
-    } else {
-      this.MSG.visible = false;
+    if (this._messageIndex < this.messageQueue.length) this._showCurrentMessage();
+    else this.MSG.visible = false;
     }
-  }
+
   getBlockAt(wx, wy) { return this.world.getBlockAt(wx, wy); }
   placeBlockAt(wx, wy, type) { this.world.setBlockAt(wx, wy, type); }
   removeBlockAt(wx, wy) { this.world.removeBlockAt(wx, wy); }
@@ -1526,15 +1757,27 @@ class Scene {
       ent.update?.(dt, this);
     }
     for (const spawner of this.spawners) {
-        spawner.update(dt, this);
+        spawner.update(dt, sm);
     }
     for (const ent of this.entities) if (!ent.alive) this.entities.delete(ent);
     if (player.wasPressed(" ") && this.MSG.visible) {
         this.advanceMessage({ hideOnDone: true });
     }
-    if(player.mouse.clicked){
-        if (this.MSG.visible) this.advanceMessage({hideOnDone:true});
-        else this.handleClick(player);
+    const tool = sm.player.tools.currentTool();
+
+    if (player.mouse.clicked) {
+    if (this.MSG.visible) {
+        this.advanceMessage({ hideOnDone: true });
+    } else {
+        if (tool?.name === "Hand") this.handleClick(player);
+        else tool?.onClick?.(this, player);
+    }
+    }
+    if (!this.MSG.visible && player.mouse.down) {
+    tool?.onHold?.(this, player, dt);
+    }
+    if (!this.MSG.visible && player.mouse.released) {
+    tool?.onRelease?.(this, player);
     }
     this.rebuildClickables();
   }
@@ -1572,12 +1815,17 @@ class ValentineScene extends Scene {
             noneLeft: false,
             renew: true
         }
-        this.messageQueue = [
-            "hello",
-        ]
+        this.defaultMessages = [
+            "hello", "aaa"
+        ];
         this.spawners.push(new CustomSpawner(this, {type:"lineOfBigFlowers", wx:100, wy:100}));
+
+        // optional timer
+        this.heartRain = { active: true, every: 0.18, acc: 0 };
+
     }
     onEnter(sm, player, payload = {}) {
+        super.onEnter(sm, player, payload);
         this.world.updateVisible(player.camera, (ent) => this.entities.add(ent));
         this.rebuildClickables(player);
         if (payload.messages?.length){
@@ -1585,18 +1833,45 @@ class ValentineScene extends Scene {
         }
         const chunk = this.world.getChunk(0, 0);
         if (chunk) chunk.decorate((ent)=>this.entities.add(ent), 70,70,2)
+        const msgs = payload.messages?.length ? payload.messages : this.defaultMessages;
+        if (msgs?.length) this.startMessages(msgs);
         
         
     }
-    update(sm, dt){
-        super.update(sm, dt)
-        this._autoExplodeBigFlowers(sm,dt)
+    update(sm, dt) {
+        super.update(sm, dt);
+        // if (this.MSG?.visible) return;
+        const camera = sm.player.camera;
+        this._autoExplodeBigFlowers(sm, dt);
+
+        sm.state.heartTimer = (sm.state.heartTimer ?? 0) + dt;
+
+        const every = 0.12;
+        while (sm.state.heartTimer > every) {
+            sm.state.heartTimer -= every;
+
+            const cx = (Math.random() - 0.5) * 700 + camera.x + canvas.width / 2;
+            const cy = (Math.random() - 0.5) * 400 + camera.y + canvas.height * 0.5;
+
+            const vx = (Math.random() - 0.5) * 120;
+            const vy = -60 - Math.random() * 120;
+
+            this.entities.add(
+            new FloatingHeart(cx, cy, {
+                vx, vy,
+                life: 2.8 + Math.random() * 1.2,
+                clickable: false, 
+                radius: 10 
+            })
+            );
+        }
     }
+
     _autoExplodeBigFlowers(sm,dt){
         const ap = this.autoPop;
         if (!ap.active) return
         ap.t += dt;
-        if (ap.t >= ap.dur) {ap.active = false}
+        if (ap.t >= ap.dur) { ap.active = false; return; }
         ap.acc += dt;
         while(ap.acc >= ap.every){
             ap.acc -= ap.every;
@@ -1611,10 +1886,11 @@ class ValentineScene extends Scene {
         for (const e of this.entities){
             if (e.type !== "bigFlower" ) continue;
             if (e.mode === "exploding") continue;
-            if (!(e.mode === "blossom" || e.grow >=98)) continue;
+            if (!(e.mode === "blossom" || e.grow >= 0.98)) continue;
             if (requireOnScreen){
                 const sx = e.wx - cam.x;
                 const sy = e.wy - cam.y;
+                if (sx < -80 || sy < -80 || sx > w + 80 || sy > h + 80) continue;
             }
             candidates.push(e)
         }
@@ -1630,9 +1906,19 @@ class ValentineScene extends Scene {
             }
         }
     }
-    renewFlowers(){
-        console.log(this.spawners)
+    renewFlowers() {
+        const cam = SM.player.camera;
+        const cx = cam.x + canvas.width * 0.5;
+        const cy = cam.y + canvas.height * 0.8; 
+        for (const sp of this.spawners) {
+            sp.def.wx = cx;
+            sp.def.wy = cy;
+            sp.needed = true;
+        }
+        this.autoPop.noneLeft = false;
+        this.autoPop.renew = false;
     }
+
 }
 
 let lastTime = 0;
@@ -1647,6 +1933,7 @@ const SM = new SceneManager(
   "valentine",
   player
 );
+EmergencyGlobals.sm = SM;
 player.sm = SM;
 
 //synch
@@ -1657,6 +1944,7 @@ function loop(now){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     SM.update(dt);
     SM.draw(now);
+
     player.beginFrame();
     requestAnimationFrame(loop);
 }
