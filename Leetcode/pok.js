@@ -3,11 +3,11 @@ const types = { //immuneAgainst/cantdamage
     normal:  {name: "normal",  immune: ['ghost'], weak: ['rock','steel'], strong: []},
     fire:    {name: "fire",    immune: [], weak: ['fire','water','rock','dragon'], strong: ['grass','ice','bug','steel']},
     water:   {name: "water",   immune: [], weak: ['water','grass','dragon'], strong: ['fire','ground','rock']},
-    electric:{name: "electric",immune: [], weak: ['electric','grass','dragon'], strong: ['water','flying']},
+    electric:{name: "electric",immune: ['ground'], weak: ['electric','grass','dragon'], strong: ['water','flying']},
     grass:   {name: "grass",   immune: [], weak: ['fire','grass','poison','flying','bug','dragon','steel'], strong: ['water','ground','rock']},
     ice:     {name: "ice",     immune: [], weak: ['fire','water','ice','steel'], strong: ['grass','ground','flying','dragon']},
-    fighting:{name: "fighting",immune: [], weak: ['flying','poison','psychic','bug','fairy'], strong: ['normal','ice','rock','dark','steel']},
-    poison:  {name: "poison",  immune: ['steel', 'poison'], weak: ['ground','rock','ghost'], strong: ['grass','fairy']},
+    fighting:{name: "fighting",immune: ['ghost'], weak: ['flying','poison','psychic','bug','fairy'], strong: ['normal','ice','rock','dark','steel']},
+    poison:  {name: "poison",  immune: ['steel'], weak: ['poison','ground','rock','ghost'], strong: ['grass','fairy']},
     ground:  {name: "ground",  immune: ['flying'], weak: ['grass','bug'], strong: ['fire','electric','poison','rock','steel']},
     flying:  {name: "flying",  immune: [], weak: ['electric','rock','steel'], strong: ['grass','fighting','bug']},
     psychic: {name: "psychic", immune: ['dark'], weak: ['psychic','steel'], strong: ['fighting','poison']},
@@ -53,8 +53,8 @@ const encountersOfEach = [
     {priType: "rock", secType: "none", amt: 9}, //nacl
     {priType: "rock", secType: "poison", amt: 6}, //glimmora
     {priType: "ghost", secType: "dragon", amt: 4},// dragapult
-    {priType: "ghost", secType: "steel", amt: 10}, //gholdengo
-    {priType: "ghost", secType: "fairy", amt: 4},// dragapult
+    {priType: "ghost", secType: "steel", amt: 15}, //gholdengo
+    {priType: "ghost", secType: "fairy", amt: 4},// mimikyu
     {priType: "dark", secType: "none", amt: 3}, //
     {priType: "dark", secType: "steel", amt: 15}, //kingambit
 ]
@@ -204,7 +204,8 @@ function getBestDefensiveTypings(types, encounters, topN = 5) {
 }
 
 
-
+//6 instantaneous 1-turn moves, win if at least one is super effective.
+//realistic 2mon offense-defense tba
 console.log(getBestMovesets(types,encountersOfEach,4))
 const best = getBestMovesets(types, encountersOfEach, 1)[0];
 console.log(best);
@@ -226,15 +227,17 @@ console.log(getBestDefensiveTypings(types, encountersOfEach, 10));
 // Object
 //Coverage: 0.9447
 
+// moveset: (6) ['ice', 'fighting', 'ground', 'bug', 'steel', 'fairy']score: 614[[Prototype]]: Object
+// pok.js:213 Coverage: 0.9692
 
 // 0
 // : 
 // score
 // : 
-// 1607
+// 3082
 // typing
 // : 
-// (2) ['electric', 'flying']
+// (2) ['ghost', 'dark']
 // [[Prototype]]
 // : 
 // Object
@@ -242,10 +245,10 @@ console.log(getBestDefensiveTypings(types, encountersOfEach, 10));
 // : 
 // score
 // : 
-// 3963
+// 4478
 // typing
 // : 
-// (2) ['flying', 'steel']
+// (2) ['normal', 'ghost']
 // [[Prototype]]
 // : 
 // Object
@@ -253,10 +256,10 @@ console.log(getBestDefensiveTypings(types, encountersOfEach, 10));
 // : 
 // score
 // : 
-// 4778
+// 4735
 // typing
 // : 
-// (2) ['poison', 'dark']
+// (2) ['dragon', 'steel']
 // [[Prototype]]
 // : 
 // Object
@@ -264,10 +267,10 @@ console.log(getBestDefensiveTypings(types, encountersOfEach, 10));
 // : 
 // score
 // : 
-// 4956
+// 4792
 // typing
 // : 
-// (2) ['electric', 'fairy']
+// (2) ['steel', 'fairy']
 // [[Prototype]]
 // : 
 // Object
