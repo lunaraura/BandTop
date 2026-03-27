@@ -12,8 +12,32 @@ function makeStats(fill = 0){
         size: fill, stamina: fill, energy: fill
     }
 }
-function addStats(){}
-function multStats(){}
+function addStats(a,b){
+    return{
+        pAtk: (a.pAtk??0) + (b.pAtk??0),
+        eAtk: (a.eAtk??0) + (b.eAtk??0),
+        range: (a.range??0) + (b.range??0),
+        maxHP: (a.maxHP??0) + (b.maxHP??0),
+        spd: (a.spd??0) + (b.spd??0),
+        castSpd: (a.castSpd??0) + (b.castSpd??0),
+        size: (a.size??0) + (b.size??0),
+        stamina: (a.stamina??0) + (b.stamina??0),
+        energy: (a.energy??0) + (b.energy??0),
+    }
+}
+function multStats(){
+    return{
+        pAtk: (a.pAtk??1) * (b.pAtk??1),
+        eAtk: (a.eAtk??1) * (b.eAtk??1),
+        range: (a.range??1) * (b.range??1),
+        maxHP: (a.maxHP??1) * (b.maxHP??1),
+        spd: (a.spd??1) * (b.spd??1),
+        castSpd: (a.castSpd??1) * (b.castSpd??1),
+        size: (a.size??1) * (b.size??1),
+        stamina: (a.stamina??1) * (b.stamina??1),
+        energy: (a.energy??1) * (b.energy??1),
+    }
+}
 
 
 
@@ -22,7 +46,7 @@ function multStats(){}
 //hurtScale: energy atk effectiveness, may include physical atks in replacement of properties
 //statBoost: stat boost per 5 size units when initializing or morphing a creature
 //maybe add recovery stat for stamina and energy: some soaks slow it down/speed it up/restore it for certain comps, etc
-const composite = {
+const composites = {
     animal: {
         name: "animal", effectiveness:{physical: 1, energy: 1}, 
         eHurtScale: {tempChange: 1, chem: 1, water: 0.75, electric: 1},
@@ -79,6 +103,7 @@ const composite = {
         pHurtScale: {pierce: 1, slash: 1, impact: 1, drill: 1},
         baselines: {temp: 0.1, water: 0, electric: 0, chemical: 0},
         capacityScale: {water: 1, cold: 2, hot: 2, electric: 0.5, chemical: 0.5},
+        tempThresholds: {hot: 0.3, cold:0},
         statBoost: {maxHP:3, pAtk: 2, eAtk: 2, spd: 0},
         specialEffects: []
     },
@@ -88,6 +113,7 @@ const composite = {
         pHurtScale: {pierce: 0.75, slash: 0.75, impact: 1.25, drill: 1},
         baselines: {temp: 0.9, water: 0, electric: 0, chemical: 0},
         capacityScale: {water: 1, cold: 2, hot: 2, electric: 0.5, chemical: 0.5},
+        tempThresholds: {hot: 1, cold:0.8},
         statBoost: {maxHP:3, pAtk: 2, eAtk: 2, spd: 0},
         specialEffects: ["waterHarden", "fireUp", "burnoff"]
     },
@@ -97,16 +123,18 @@ const composite = {
         pHurtScale: {pierce: 1.5, slash: 0.75, impact: 1.75, drill: 1},
         baselines: {temp: 0.2, water: 0, electric: 0, chemical: 0},
         capacityScale: {water: 1, cold: 2, hot: 2, electric: 0.5, chemical: 0.5},
+        tempThresholds: {hot: 0.3, cold:0},
         statBoost: {maxHP:3, pAtk: 2, eAtk: 2, spd: 0},
         specialEffects: ["waterHarden", "solidIce"]
     },
     rock: {
         name: "rock", effectiveness:{physical: 1, energy: 0.5},
-        eHurtScale: {tempChange: 0.5, chem: 0.25, water: 1.5, electric: 0.5},
+        eHurtScale: {tempChange: 0.5, chem: 0.25, water: 1.5, electric: 0.25},
         pHurtScale: {pierce: 0.5, slash: 0.5, impact: 1.25, drill: 1.5},
         baselines: {temp: 0.9, water: 0, electric: 0, chemical: 0},
         capacityScale: {water: 1, cold: 1, hot: 1, electric: 1, chemical: 1},
-        statBoost: {maxHP:3, pAtk: 5, eAtk: 5, spd: 0},
+        tempThresholds: {hot: 0.7, cold:0.3},
+        statBoost: {maxHP:3, pAtk: 5, eAtk: 0, spd: 0},
         specialEffects: ["hardSurface"]
     }
 }
@@ -143,21 +171,21 @@ const specialEffects = {
         name: "Water On Water",
         desc: "When soaked with water, add flat HP per water units."
     },
-    waterHealed: {
+    waterHeal: {
         name: "Water Healing",
-        desc: "Instead of normal water soak depletion, consume it to heal 1 health per 1 water unit"
+        desc: "Instead of normal water soak depletion, the creature consumes it to heal 1 health per 1 water unit"
     },
     fireUp: {
         name: "Fired up",
         desc: "When gaining heat, boost energy attacks from this creature."
     },
-    burnoffAll: {
+    burnoff: {
         name: "Burnoff",
         desc: "All soaks burn off twice as fast on this creature."
     },
     hardSurface:{
         name:"Hard Surface",
-        desc: "All soaks are consumed instantly as half damage on this creature"
+        desc: "All non-temperature soaks are consumed instantly as half damage on this creature"
     }
 }
 const abilities = {
@@ -170,15 +198,16 @@ const abilities = {
         effects: [], soakAdd: [{}], args: [{delayStart:10}, {maxCastRange:50}, {radius:50}, {pos: "fixed"}] //args arbitrary until theres a function/class to process it
     },
     frostAOELinger: {
-        name: "Frost Wind", category: "AOEInstant", flatDmg: {p: 0, e: 1}, dmgScale: {p: 0, e: 0.2}, cooldown: 200,
+        name: "Frost Wind", category: "AOELinger", flatDmg: {p: 0, e: 1}, dmgScale: {p: 0, e: 0.2}, cooldown: 200,
         effects: [], soakAdd: [], args: [{delayStart:0}, {maxCastRange:50}, {radius:50}, {pos: "anchorToEntity"}, {dps: 20}, {life: 100}] //just for planning, etc
     },
     zap: {
         name: "Zap", category: "Hitscan", flatDmg: {p: 0, e: 20}, dmgScale: {p: 0, e: 0.8}, cooldown: 100,
-        effects: [], soakAdd: ["electric"], args: []
+        effects: [], soakAdd: [{electric:3}], args: []
     }
 }
 const temp = { //lazy
+    baseStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
     baseStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
     maxVariation: {pAtk: 5, eAtk: 5, maxHP:20, spd: 10, castSpd: 50, range: 0, size: 5, stamina: 10, energy: 10},
     levelUp: {pAtk: 2, eAtk: 2, maxHP:10, spd: 5, castSpd: 10, range: 1, size: 1, stamina: 5, energy: 5},
@@ -191,8 +220,11 @@ const species = {
         commonComp: {inner: ["animal"], outer: ["animal"]},
         morphs: { 
             stage1: { //add stuff for more base stats
-                armoredDog: {name:"Steel Dog", composite: {inner: "animal", outer:"metal"}, morphPointsNeeded: [{metal: 50}]}, morphNeeded: n,
-                cyberDog: {name:"Cyber Dog", composite: {inner: "metal", outer:"animal"}, morphPointsNeeded: [{metal: 20}, {electric:20}]}
+                armoredDog: {name:"Steel Dog", composite: {inner: "animal", outer:"metal"}, morphPointsNeeded: [{metal: 50}], morphNeeded: "none",
+                baseStats: temp.morphStats, allowedMoves: []
+            },
+                cyberDog: {name:"Cyber Dog", composite: {inner: "metal", outer:"animal"}, morphPointsNeeded: [{metal: 20}, {electric:20}],morphNeeded: "none",
+                baseStats: temp.morphStats}, allowedMoves: []
             },
             stage2: {} //probably more base stats, allowed moves
         }
@@ -202,4 +234,40 @@ const species = {
         levelUpBoost: temp.levelUp,  baseMoveset: temp.baseMoveset,
         commonComp: {inner: ["plant"], outer: ["plant"]}
     },
+}
+
+class Creature{
+    constructor(pos, species, team){
+        this.pos = pos; this.vel = {x:0,y:0};
+        this.angle = 0; this.angVel = 0; //in rads rn
+        this.species = species;
+        this.team = team;
+
+        this.stats = makeStats();
+        this.composite = null;
+
+    }
+}
+
+//ufncion or class?
+class CreatureFactory{
+    constructor(type, origin, teamNumber, amtOfTeams){
+        this.type = type
+        this.origin = origin;
+        this.teamNumber = teamNumber;
+        this.amtOfTeam = amtOfTeams;
+    }
+    spawnpoint(){
+        for(let i = 0; i < 100; i++){
+            let pos = {x: Math.random()*1000, y: Math.random()*1000} //placeholder, make sure to spawn within bounds and not on top of other creatures
+            if(this.isValidSpawn(pos)) return pos;
+        }
+    }
+    createEntity(){
+
+    }
+    rollEntityStats(){
+        //composites, then base stats, then random innate stats, each rounded.
+        //most starting creatures will have 100% chance of whats in common composite pool
+    }
 }
