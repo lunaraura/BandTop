@@ -145,7 +145,18 @@ const composites = {
         tempThresholds: {hot: 0.7, cold:0.3},
         statBoost: {maxHP:3, pAtk: 5, eAtk: 0, spd: 0},
         specialEffects: ["hardSurface"]
-    }
+    },
+    metal: {
+        name: "metal", effectiveness:{physical: 0.75, energy: 1.25},
+        eHurtScale: {tempChange: 0.5, chem: 0.5, water: 1, electric: 0.25},
+        pHurtScale: {pierce: 0.5, slash: 0.5, impact: 1.25, drill: 1},
+        baselines: {temp: 0.5, water: 0, electric: 0, chemical: 0},
+        capacityScale: {water: 1, electric: 1.5, chemical: 0.5},
+        tempCapHot: 1.5, tempCapCold: 0.5,
+        tempThresholds: {hot: 0.8, cold: 0.2},
+        statBoost: {pAtk: 3, eAtk: 0, maxHP: 2, spd: 0},
+        specialEffects: []
+    },
 }
 
 const tempStates = {
@@ -220,7 +231,7 @@ const abilities = {
 }
 const temp = { //lazy
     baseStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
-    baseStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
+    morphStast: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
     maxVariation: {pAtk: 5, eAtk: 5, maxHP:20, spd: 10, castSpd: 50, range: 0, size: 5, stamina: 10, energy: 10},
     levelUp: {pAtk: 2, eAtk: 2, maxHP:10, spd: 5, castSpd: 10, range: 1, size: 1, stamina: 5, energy: 5},
     baseMoveset: ["ram"]
@@ -247,10 +258,208 @@ const species = {
         commonComp: {inner: ["plant"], outer: ["plant"]}
     },
 }
+
+
+// global stuff
+class TimeManager {
+    constructor() {this.systems = [];}
+    add(system) {this.systems.push(system);}
+    remove(system) {this.systems = this.systems.filter(s => s !== system);}
+    update(dt) {
+        for (const s of this.systems) {
+            if (s && typeof s.update === "function") s.update(dt);            
+        }
+    }
+}
+class Space {
+    constructor(width, height) {
+        this.width  = width;
+        this.height = height;
+    }
+    clamp(x, z) {return {x: Math.max(0, Math.min(this.width,  x)),z: Math.max(0, Math.min(this.height, z))};}
+    randomPoint() {return {x: Math.random() * this.width,z: Math.random() * this.height};
+    }
+}
+class Camera {
+    constructor() {
+        this.x      = 0;
+        this.z      = 0;
+        this.zoom   = 3;
+        this.target = null;
+    }
+    follow(entity) {this.target = entity;}
+    worldToScreen(x, z) {return {sx: (x - this.x) * this.zoom + canvas.width  / 2,sz: (z - this.z) * this.zoom + canvas.height / 2};}
+    screenToWorld(sx, sz) {return {x: (sx - canvas.width  / 2) / this.zoom + this.x,z: (sz - canvas.height / 2) / this.zoom + this.z};}
+
+    update(dt) {
+        if (!this.target) return;
+        const lerp = 10 * dt;
+        this.x += (this.target.x - this.x) * lerp;
+        this.z += (this.target.z - this.z) * lerp;
+    }
+}
+class World {
+    constructor(space) {
+        this.space       = space;
+        this.entities    = [];
+        this.projectiles = [];
+        this.areaEffects = [];
+        this.spawnField = null;
+    }
+    addEntity(e)      { this.entities.push(e);      return e; }
+    addProjectile(p)  { this.projectiles.push(p);   return p; }
+    addAreaEffect(a)  { this.areaEffects.push(a);   return a; }
+    setSpawnField(field) {this.spawnField = field;}
+    update(dt) {
+        if (this.spawnField) {
+            this.spawnField.update(dt);
+        }
+        this.entities.forEach(e    => e.update(dt, this));
+        this.projectiles.forEach(p => p.update(dt, this));
+        this.areaEffects.forEach(a => a.update(dt, this));
+
+        this.entities    = this.entities.filter(e => e.alive);
+        this.projectiles = this.projectiles.filter(p => p.alive);
+        this.areaEffects = this.areaEffects.filter(a => a.alive);
+    }
+    draw(ctx, camera) {
+        ctx.fillStyle = "#6aa56a";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        this.areaEffects.forEach(a => a.draw(ctx, camera));
+        this.entities.forEach(e    => e.draw(ctx, camera));
+        this.projectiles.forEach(p => p.draw(ctx, camera));
+    }
+}
+class SpawnField {
+    constructor(world, player, options = {}) {
+        this.world  = world;
+        this.player = player;
+        this.radius          = options.radius || 120;
+        this.innerNoSpawn    = options.innerNoSpawn || 40; 
+        this.maxWild         = options.maxWild || 6;
+        this.spawnInterval   = options.spawnInterval || 2.5;
+        this.timer = 0;
+        this.speciesPool = options.speciesPool || ["dog", "shrubling"];
+    }
+    update(dt) {
+        this.timer += dt;
+        if (this.timer >= this.spawnInterval) {this.timer = 0;this.trySpawn();}
+        this.cleanup();
+    }
+    trySpawn() {
+        const currentWild = this.world.entities.filter(e => e instanceof WildEntity).length;
+        if (currentWild >= this.maxWild) return;
+        const speciesKey = this.speciesPool[Math.floor(Math.random() * this.speciesPool.length)];
+        const pos = this.randomSpawnPoint();
+        if (!pos) return;
+        const factory = new CreatureFactory(speciesKey, "wild", 0, 1);
+        const creature = factory.createEntity();
+        this.world.addEntity(new WildEntity(this.world, creature, pos.x, pos.z));
+    }
+    randomSpawnPoint() {
+        const px = this.player.x;
+        const pz = this.player.z;
+        for (let i = 0; i < 10; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist  = this.innerNoSpawn + Math.random() * (this.radius - this.innerNoSpawn);
+            const x = px + Math.cos(angle) * dist; const z = pz + Math.sin(angle) * dist;
+            if (x < 0 || x > this.world.space.width) continue;
+            if (z < 0 || z > this.world.space.height) continue;
+            return { x, z };
+        }
+        return null;
+    }
+    cleanup() {
+        const px = this.player.x;
+        const pz = this.player.z;
+        this.world.entities = this.world.entities.filter(e => {
+            if (!(e instanceof WildEntity)) return true;
+            const dx = e.x - px;
+            const dz = e.z - pz;
+            const dist = Math.hypot(dx, dz);
+
+            if (dist > this.radius * 1.8) { 
+                return false; 
+            }
+            return true;
+        });
+    }
+}
+const MorphService = {
+    canMorph(creature, morphKey) {
+        const spec = species[creature.species];
+        const morph = spec.morphs.stage1[morphKey]; // check stage
+        if (!morph) return false;
+        return morph.morphPointsNeeded.every(req => {
+            const [mat, amt] = Object.entries(req)[0];
+            return (creature.morphPoints?.[mat] ?? 0) >= amt;
+        });
+    },
+    applyMorph(creature, morphKey) {
+        if (!MorphService.canMorph(creature, morphKey)) return false;
+        const spec = species[creature.species];
+        const morph = spec.morphs.stage1[morphKey];
+        creature.composites = morph.composite;
+        creature.morphPath = morphKey;
+        creature.morphStage = 1;
+
+        const allComps = [morph.composite.inner, morph.composite.outer]; // strings, not arrays
+        const factory = new CreatureFactory(creature.species, null, creature.team, 1);
+        creature.soakCap      = factory.initSoakCaps(creature.baseStats.size, allComps);
+        const tempCaps        = factory.initTempCaps(creature.baseStats.size, allComps);
+        creature.tempCapHot   = tempCaps.hot;
+        creature.tempCapCold  = tempCaps.cold;
+        creature.soakBaseline = factory.initSoakBaselines(allComps);
+        creature.tempRatio    = factory.calcTempRatio(creature);
+        return true;
+    }
+};
+const LevelService = {
+    ensure(creature) {
+        if (!creature.level)   creature.level = 1;
+        if (!creature.xp)      creature.xp = 0;
+        if (!creature.nextXP)  creature.nextXP = 10;
+        if (!creature.baseStats) {
+            creature.baseStats = { ...creature.stats };
+        }
+    },
+    xpNeeded(level) {
+        return 10 * level; // same simple curve
+    },
+    recomputeStats(creature) {
+        const base = creature.baseStats;
+        const L = creature.level;
+        const hpMul   = 1 + 0.2 * (L - 1);
+        const statMul = 1 + 0.1 * (L - 1);
+        creature.modifiedStats = {
+            ...base,
+            maxHP:  Math.floor(base.maxHP  * hpMul),
+            pAtk:   Math.floor(base.pAtk   * statMul),
+            eAtk:   Math.floor(base.eAtk   * statMul),
+            spd:    Math.floor(base.spd     * statMul),
+            stamina:Math.floor(base.stamina * statMul),
+            energy: Math.floor(base.energy  * statMul),
+        };
+        creature.currentHP = Math.min(creature.currentHP, creature.modifiedStats.maxHP);
+    },
+    addXP(creature, amount) {
+        if (amount <= 0) return;
+        LevelService.ensure(creature);
+        creature.xp += amount;
+        while (creature.xp >= creature.nextXP) {
+            creature.xp -= creature.nextXP;
+            creature.level += 1;
+            creature.nextXP = LevelService.xpNeeded(creature.level);
+            LevelService.recomputeStats(creature);
+        }
+    }
+};
+
+//Creature
 let newID = 0
 class Creature{
     constructor(pos, species, team){
-        this.pos = pos; this.vel = {x:0,y:0};
+        this.pos = pos; this.vel = {x:0,z:0};
         this.angle = 0; this.angVel = 0; //in rads rn
         this.species = species;
         this.team = team; this.id = newID++; this.isDead = false;
@@ -273,6 +482,19 @@ function getTempState(creature) {
     if (ratio <= thresholds.cold) return "freezing";
     return "normal";
 }
+function getCompositeThresholds(creature) {
+    const inner = Array.isArray(creature.composites.inner) 
+        ? creature.composites.inner : [creature.composites.inner];
+    const outer = Array.isArray(creature.composites.outer) 
+        ? creature.composites.outer : [creature.composites.outer];
+    const comps = [...inner, ...outer];
+    let hot = 0, cold = 0;
+    comps.forEach(key => {
+        hot  += composites[key].tempThresholds.hot;
+        cold += composites[key].tempThresholds.cold;
+    });
+    return { hot: hot / comps.length, cold: cold / comps.length };
+}
 //ufncion or class?
 class CreatureFactory{
     constructor(type, origin, teamNumber, amtOfTeams){
@@ -283,7 +505,7 @@ class CreatureFactory{
     }
     spawnpoint(){
         for(let i = 0; i < 100; i++){
-            let pos = {x: Math.random()*1000, y: Math.random()*1000} //placeholder, make sure to spawn within bounds and not on top of other creatures
+            let pos = {x: Math.random()*1000, z: Math.random()*1000} //placeholder, make sure to spawn within bounds and not on top of other creatures
             if(this.isValidSpawn(pos)) return pos;
         }
     }
@@ -375,7 +597,6 @@ class CreatureFactory{
     rollEntityStats(speciesKey, compositesKeys) {
         const spec = species[speciesKey];
         let finalStats = addStats(spec.baseStats, this.generateVariation(spec.maxVariation));
-        
         compositesKeys.forEach(key => {
             const comp = composites[key];
             if (comp.statBoost) {
@@ -387,5 +608,41 @@ class CreatureFactory{
         });
         return finalStats;
     }
-    rollStarterEntityMoves(speciesKey){}
+    generateVariation(maxVariation) {
+        const v = makeStats(0);
+        for (const key in maxVariation) {
+            v[key] = (Math.random() * 2 - 1) * (maxVariation[key] ?? 0);
+        }
+        return v;
+    }
+    scaleStats(statBoost, multiplier) {
+        const out = makeStats(0);
+        for (const key in statBoost) {
+            out[key] = (statBoost[key] ?? 0) * multiplier;
+        }
+        return out;
+    }
+    rollStarterEntityMoves(speciesKey) {
+        return [...species[speciesKey].baseMoveset];
+    }
+    isValidSpawn(){
+        return true;
+    }
 }
+
+// test
+const factory = new CreatureFactory("dog", "wild", 0, 1);
+const c = factory.createEntity();
+console.log("base stats:", c.baseStats);
+console.log("temp ratio:", c.tempRatio);
+
+LevelService.addXP(c, 50);
+console.log("after level up:", c.level, c.modifiedStats);
+
+// force morph — bypass point check
+c.morphPoints = { metal: 20, electric: 20 };
+MorphService.applyMorph(c, "cyberDog");
+console.log("after morph:", c.composites, c.soakCap, c.tempCapHot);
+
+LevelService.addXP(c, 100);
+console.log("after level up:", c.level, c.modifiedStats);
