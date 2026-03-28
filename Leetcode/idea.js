@@ -25,7 +25,7 @@ function addStats(a,b){
         energy: (a.energy??0) + (b.energy??0),
     }
 }
-function multStats(){
+function multStats(a,b){
     return{
         pAtk: (a.pAtk??1) * (b.pAtk??1),
         eAtk: (a.eAtk??1) * (b.eAtk??1),
@@ -235,17 +235,23 @@ const species = {
         commonComp: {inner: ["plant"], outer: ["plant"]}
     },
 }
-
+let newID = 0
 class Creature{
     constructor(pos, species, team){
         this.pos = pos; this.vel = {x:0,y:0};
         this.angle = 0; this.angVel = 0; //in rads rn
         this.species = species;
-        this.team = team;
+        this.team = team; this.id = newID++; isDead = false;
 
-        this.stats = makeStats();
-        this.composite = null;
+        this.baseStats = makeStats();
+        this.modifiedStats = makeStats();
+        this.composites = null; this.morphStage = 0;
 
+        this.soaks={water:0, electric:0, hot:0, cold:0, chemical:0}
+        this.soakCap={water:0, electric:0, hot:0, cold:0, chemical:0} //maybe scaled 5 times size stat
+        this.soakBaseline = {water:0, electric:0, hot:0, cold:0, chemical:0}
+        this.maxTemp = null; //soak cap hot+cold
+        this.tempRatio = null;
     }
 }
 
@@ -266,8 +272,20 @@ class CreatureFactory{
     createEntity(){
 
     }
-    rollEntityStats(){
-        //composites, then base stats, then random innate stats, each rounded.
-        //most starting creatures will have 100% chance of whats in common composite pool
+    rollEntityStats(speciesKey, compositesKeys) {
+        const spec = species[speciesKey];
+        let finalStats = addStats(spec.baseStats, this.generateVariation(spec.maxVariation));
+        
+        compositesKeys.forEach(key => {
+            const comp = composites[key];
+            if (comp.statBoost) {
+                // If size is 10, and boost is per 5 units, mult by 2
+                const multiplier = finalStats.size / 5; 
+                const boost = this.scaleStats(comp.statBoost, multiplier);
+                finalStats = addStats(finalStats, boost);
+            }
+        });
+        return finalStats;
     }
+    rollStarterEntityMoves(speciesKey){}
 }
