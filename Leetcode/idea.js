@@ -1,3 +1,6 @@
+const canvas = document.getElementById("canvas");
+const ctx    = canvas.getContext("2d");
+
 //helpers
 function clamp(v,min,max){
     return Math.max(min,Math.min(max,v))
@@ -39,8 +42,8 @@ function multStats(a,b){
         size: (a.size??1) * (b.size??1),
         stamina: (a.stamina??1) * (b.stamina??1),
         energy: (a.energy??1) * (b.energy??1),
-        recoverStamina: (a.recoverStamina??0) * (b.recoverStamina??0),
-        recoverEnergy: (a.recoverEnergy??0) * (b.recoverEnergy??0),
+        recoverStamina: (a.recoverStamina??1) * (b.recoverStamina??1),
+        recoverEnergy: (a.recoverEnergy??1) * (b.recoverEnergy??1),
     }
 }
 
@@ -229,32 +232,33 @@ const abilities = {
         effects: [], soakAdd: [{electric:3}], args: []
     }
 }
-const temp = { //lazy
+const temporary = { //lazy
     baseStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
-    morphStast: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
+    morphStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
     maxVariation: {pAtk: 5, eAtk: 5, maxHP:20, spd: 10, castSpd: 50, range: 0, size: 5, stamina: 10, energy: 10},
     levelUp: {pAtk: 2, eAtk: 2, maxHP:10, spd: 5, castSpd: 10, range: 1, size: 1, stamina: 5, energy: 5},
     baseMoveset: ["ram"]
 }
 const species = {
     dog: {
-        name: "Dog", baseStats: temp.baseStats, maxVariation: temp.maxVariation,
-        levelUpBoost: temp.levelUp, baseMoveset: temp.baseMoveset,
+        name: "Dog", baseStats: temporary.baseStats, maxVariation: temporary.maxVariation,
+        levelUpBoost: temporary.levelUp, baseMoveset: temporary.baseMoveset,
         commonComp: {inner: ["animal"], outer: ["animal"]},
         morphs: { 
             stage1: { //add stuff for more base stats
                 armoredDog: {name:"Steel Dog", composite: {inner: "animal", outer:"metal"}, morphPointsNeeded: [{metal: 50}], morphNeeded: "none",
-                baseStats: temp.morphStats, allowedMoves: []
-            },
+                    baseStats: temporary.morphStats, allowedMoves: []
+                },
                 cyberDog: {name:"Cyber Dog", composite: {inner: "metal", outer:"animal"}, morphPointsNeeded: [{metal: 20}, {electric:20}],morphNeeded: "none",
-                baseStats: temp.morphStats}, allowedMoves: []
+                    baseStats: temporary.morphStats, allowedMoves: []
+                },
             },
             stage2: {} //probably more base stats, allowed moves
         }
     },
     shrubling: {
-        name: "Shrubling", baseStats: temp.baseStats, maxVariation: temp.maxVariation,
-        levelUpBoost: temp.levelUp,  baseMoveset: temp.baseMoveset,
+        name: "Shrubling", baseStats: temporary.baseStats, maxVariation: temporary.maxVariation,
+        levelUpBoost: temporary.levelUp,  baseMoveset: temporary.baseMoveset,
         commonComp: {inner: ["plant"], outer: ["plant"]}
     },
 }
@@ -411,6 +415,8 @@ const MorphService = {
         creature.tempCapCold  = tempCaps.cold;
         creature.soakBaseline = factory.initSoakBaselines(allComps);
         creature.tempRatio    = factory.calcTempRatio(creature);
+        
+        recomputeModifiedStats(creature);
         return true;
     }
 };
@@ -427,20 +433,7 @@ const LevelService = {
         return 10 * level; // same simple curve
     },
     recomputeStats(creature) {
-        const base = creature.baseStats;
-        const L = creature.level;
-        const hpMul   = 1 + 0.2 * (L - 1);
-        const statMul = 1 + 0.1 * (L - 1);
-        creature.modifiedStats = {
-            ...base,
-            maxHP:  Math.floor(base.maxHP  * hpMul),
-            pAtk:   Math.floor(base.pAtk   * statMul),
-            eAtk:   Math.floor(base.eAtk   * statMul),
-            spd:    Math.floor(base.spd     * statMul),
-            stamina:Math.floor(base.stamina * statMul),
-            energy: Math.floor(base.energy  * statMul),
-        };
-        creature.currentHP = Math.min(creature.currentHP, creature.modifiedStats.maxHP);
+        recomputeModifiedStats(creature);
     },
     addXP(creature, amount) {
         if (amount <= 0) return;
@@ -454,6 +447,40 @@ const LevelService = {
         }
     }
 };
+function recomputeModifiedStats(creature) {
+    const base = creature.baseStats;
+    const L = creature.level ?? 1;
+    const spec = species[creature.species];
+
+    // level bonus scales species.levelUpBoost per level gained
+    const lvlBonus = makeStats(0);
+    for (const key in lvlBonus) {
+        lvlBonus[key] = (spec.levelUpBoost?.[key] ?? 0) * (L - 1);
+    }
+
+    // morph bonus from composite statBoosts if morphed
+    let morphBonus = makeStats(0);
+    if (creature.morphPath) {
+        const stageKey = `stage${creature.morphStage}`;
+        const morph = spec.morphs?.[stageKey]?.[creature.morphPath];
+        if (morph) {
+            const allComps = [morph.composite.inner, morph.composite.outer];
+            const size = base.size + lvlBonus.size; // use grown size for scaling
+            allComps.forEach(compKey => {
+                const comp = composites[compKey];
+                if (!comp?.statBoost) return;
+                const multiplier = size / 5;
+                const boost = Object.fromEntries(
+                    Object.entries(comp.statBoost).map(([k, v]) => [k, v * multiplier])
+                );
+                morphBonus = addStats(morphBonus, boost);
+            });
+        }
+    }
+
+    creature.modifiedStats = addStats(addStats(base, lvlBonus), morphBonus);
+    creature.currentHP = Math.min(creature.currentHP, creature.modifiedStats.maxHP);
+}
 
 //Creature
 let newID = 0
@@ -611,7 +638,7 @@ class CreatureFactory{
     generateVariation(maxVariation) {
         const v = makeStats(0);
         for (const key in maxVariation) {
-            v[key] = (Math.random() * 2 - 1) * (maxVariation[key] ?? 0);
+            v[key] = Math.round((Math.random() ) * (maxVariation[key] ?? 0));
         }
         return v;
     }
