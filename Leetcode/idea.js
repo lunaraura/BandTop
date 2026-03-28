@@ -9,7 +9,8 @@ function makeStats(fill = 0){
     return{
         pAtk: fill, eAtk: fill, range: fill, //melee
         maxHP:fill, spd: fill, castSpd: fill,
-        size: fill, stamina: fill, energy: fill
+        size: fill, stamina: fill, energy: fill,
+        recoverStamina: fill, recoverEnergy: fill,
     }
 }
 function addStats(a,b){
@@ -23,6 +24,8 @@ function addStats(a,b){
         size: (a.size??0) + (b.size??0),
         stamina: (a.stamina??0) + (b.stamina??0),
         energy: (a.energy??0) + (b.energy??0),
+        recoverStamina: (a.recoverStamina??0) + (b.recoverStamina??0), //recovers x per second
+        recoverEnergy: (a.recoverEnergy??0) + (b.recoverEnergy??0),
     }
 }
 function multStats(a,b){
@@ -36,6 +39,8 @@ function multStats(a,b){
         size: (a.size??1) * (b.size??1),
         stamina: (a.stamina??1) * (b.stamina??1),
         energy: (a.energy??1) * (b.energy??1),
+        recoverStamina: (a.recoverStamina??0) * (b.recoverStamina??0),
+        recoverEnergy: (a.recoverEnergy??0) * (b.recoverEnergy??0),
     }
 }
 
@@ -52,8 +57,10 @@ const composites = {
         eHurtScale: {tempChange: 1, chem: 1, water: 0.75, electric: 1},
         pHurtScale: {pierce: 1, slash: 1, impact: 1, drill: 1},
         baselines: {temp: 0.5, water: 0, electric: 0.0, chemical: 0}, //The ratio of capacity soaks that it will bleed to.
-        capacityScale: {water: 1, cold: 1, hot: 1, electric: 1, chemical: 1}, //per 1 size unit
-        tempThresholds: {hot: 0.7, cold:0.3}, //ratios indicating threshold before temp change actually does damage
+        capacityScale: {water: 1, electric: 1, chemical: 1},
+        tempCapHot: 1,   // how much positive temp deviation it can absorb per size unit
+        tempCapCold: 1,  // how much negative temp deviation it can absorb per size unit
+        tempThresholds: {hot: 0.7, cold: 0.3},
         statBoost: {pAtk: 1, eAtk: 0, maxHP:1, spd: 0},
         specialEffects: []
     },
@@ -102,8 +109,10 @@ const composites = {
         eHurtScale: {tempChange: 1.5, chem: 0.25, water: 0.75, electric: 0.75},
         pHurtScale: {pierce: 1, slash: 1, impact: 1, drill: 1},
         baselines: {temp: 0.1, water: 0, electric: 0, chemical: 0},
-        capacityScale: {water: 1, cold: 2, hot: 2, electric: 0.5, chemical: 0.5},
-        tempThresholds: {hot: 0.3, cold:0},
+        capacityScale: {water: 1, electric: 0.5, chemical: 0.5},
+        tempCapHot: 2,   // large — tolerates a lot of heat before threshold
+        tempCapCold: 2,
+        tempThresholds: {hot: 0.3, cold: 0},
         statBoost: {maxHP:3, pAtk: 2, eAtk: 2, spd: 0},
         specialEffects: []
     },
@@ -139,13 +148,16 @@ const composites = {
     }
 }
 
+const tempStates = {
+    sweltering: { effect: "melt", vulnerability: ["slash", "pierce", "drill"] },
+    freezing:   { effect: "brittle", vulnerability: ["impact"] },
+    normal:     { effect: "none", vulnerability: [] }
+}
 //might rework to make effects return functions for additional tick
 const soakEffects = {
-    water: {name: "water", effect: "none", vulnerability: ["electric"], boost: "none", per: 1},
-    electric: {name: "electric", effect: "damage", vulnerability: [], boost: "energy", per: 1},
-    cold: {name: "freezing", effect: "brittle", vulnerability: ["impact"], boost: "none", per: 1}, 
-    hot: {name: "sweltering", effect: "melt", vulnerability: ["slash", "pierce", "drill"], boost: "none", per: 1},  
-    chemical: {name: "chemical", effect: "damage", vulnerability: "none", boost: "none", per: 1},
+    water:    {name: "water",    effect: "none",   vulnerability: ["electric"], boost: "none",   per: 1},
+    electric: {name: "electric", effect: "damage", vulnerability: [],           boost: "energy", per: 1},
+    chemical: {name: "chemical", effect: "damage", vulnerability: [],           boost: "none",   per: 1},
 }
 const specialEffects = {
     waterVolt: {
@@ -241,20 +253,26 @@ class Creature{
         this.pos = pos; this.vel = {x:0,y:0};
         this.angle = 0; this.angVel = 0; //in rads rn
         this.species = species;
-        this.team = team; this.id = newID++; isDead = false;
+        this.team = team; this.id = newID++; this.isDead = false;
 
         this.baseStats = makeStats();
         this.modifiedStats = makeStats();
         this.composites = null; this.morphStage = 0;
-
-        this.soaks={water:0, electric:0, hot:0, cold:0, chemical:0}
-        this.soakCap={water:0, electric:0, hot:0, cold:0, chemical:0} //maybe scaled 5 times size stat
-        this.soakBaseline = {water:0, electric:0, hot:0, cold:0, chemical:0}
-        this.maxTemp = null; //soak cap hot+cold
-        this.tempRatio = null;
+        this.soaks =        { water: 0, electric: 0, temp: 0, chemical: 0 }
+        this.soakCap =      { water: 0, electric: 0, chemical: 0 }
+        this.soakBaseline = { water: 0, electric: 0, temp: 0, chemical: 0 }
+        this.tempCapHot  = 0;   // max positive temp deviation
+        this.tempCapCold = 0;   // max negative temp deviation (stored as positive)
+        this.tempRatio   = null; // derived each tick
     }
 }
-
+function getTempState(creature) {
+    const ratio = creature.tempRatio; // baseline + offset
+    const thresholds = getCompositeThresholds(creature); // averaged across composites
+    if (ratio >= thresholds.hot) return "sweltering";
+    if (ratio <= thresholds.cold) return "freezing";
+    return "normal";
+}
 //ufncion or class?
 class CreatureFactory{
     constructor(type, origin, teamNumber, amtOfTeams){
@@ -269,8 +287,90 @@ class CreatureFactory{
             if(this.isValidSpawn(pos)) return pos;
         }
     }
-    createEntity(){
+    createEntity() {
+        const spec = species[this.type];
+        const comp = spec.commonComp; // {inner: [...], outer: [...]}
+        const allComps = [...comp.inner, ...comp.outer];
 
+        // 1. Roll stats
+        const stats = this.rollEntityStats(this.type, allComps);
+
+        // 2. Roll moveset
+        const moveset = this.rollStarterEntityMoves(this.type);
+
+        // 3. Build creature
+        const pos = this.spawnpoint();
+        const creature = new Creature(pos, this.type, this.teamNumber);
+
+        creature.level = 1;
+        creature.baseStats = stats;
+        creature.modifiedStats = { ...stats };
+        creature.composites = comp;
+        creature.morphStage = 0;
+        creature.morphPath = null; // e.g. "armoredDog" once morphed
+
+        // 4. Current resource pools
+        creature.currentHP = stats.maxHP;
+        creature.currentStamina = stats.stamina;
+        creature.currentEnergy = stats.energy;
+
+        // 5. Recovery rates (can be tweaked per composite later)
+        creature.recovery = { stamina: 2, energy: 1 };
+
+        // 6. Init soaks
+        creature.soakCap      = this.initSoakCaps(stats.size, allComps);
+        creature.soakBaseline = this.initSoakBaselines(allComps);
+        const tempCaps        = this.initTempCaps(stats.size, allComps);
+        creature.tempCapHot   = tempCaps.hot;
+        creature.tempCapCold  = tempCaps.cold;
+        creature.soaks        = { ...creature.soakBaseline, temp: 0 }; // temp offset starts at 0
+        creature.tempRatio    = this.calcTempRatio(creature);
+
+        // 7. Per-creature cooldown state
+        creature.moveset = moveset;
+        creature.cooldowns = {};
+        moveset.forEach(key => creature.cooldowns[key] = 0);
+
+        // 8. Active status effects
+        creature.statusEffects = [];
+        creature.tameProgress = 0;
+        creature.isDead = false; // fixed the global bug
+
+        return creature;
+    }
+    initSoakCaps(size, compKeys) {
+        const cap = { water: 0, electric: 0, chemical: 0 };
+        compKeys.forEach(key => {
+            const scale = composites[key].capacityScale;
+            for (const s in cap) cap[s] += (scale[s] ?? 1) * size;
+        });
+        return cap;
+    }
+    initTempCaps(size, compKeys) {
+        let hot = 0, cold = 0;
+        compKeys.forEach(key => {
+            const comp = composites[key];
+            hot  += (comp.tempCapHot  ?? 1) * size;
+            cold += (comp.tempCapCold ?? 1) * size;
+        });
+        return { hot, cold };
+    }
+    initSoakBaselines(compKeys) {
+        const base = { water: 0, electric: 0, temp: 0, chemical: 0 };
+        compKeys.forEach(key => {
+            const bl = composites[key].baselines;
+            for (const s in base) base[s] += (bl[s] ?? 0) / compKeys.length;
+        });
+        return base;
+    }
+    calcTempRatio(creature) {
+        const baseline = creature.soakBaseline.temp; // e.g. 0.9 for fire
+        const offset   = creature.soaks.temp;        // signed deviation
+        if (offset >= 0) {
+            return baseline + (offset / (creature.tempCapHot  || 1)) * (1 - baseline);
+        } else {
+            return baseline + (offset / (creature.tempCapCold || 1)) * baseline;
+        }
     }
     rollEntityStats(speciesKey, compositesKeys) {
         const spec = species[speciesKey];
