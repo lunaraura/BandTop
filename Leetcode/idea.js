@@ -799,17 +799,11 @@ class TemporaryArena {
 
     step(dt) {
         if (!this.started || this.ended) return;
-
         this.time += dt;
-
-        // placeholder: later call creature AI / ability resolution / movement
         for (const creature of this.getLivingCreatures()) {
             const target = this.findNearestEnemy(creature);
             if (!target) continue;
 
-            // example placeholder behavior:
-            // creature.updateArenaIntent?.(this, target, dt);
-            // creature.tickArena?.(this, dt);
         }
 
         this.checkWinner();
@@ -828,5 +822,198 @@ class TemporaryArena {
             winnerTeam: this.winnerTeam,
             steps
         };
+    }
+}
+class Brain {
+    constructor() {
+        this.host = null;
+        this.observedCreatures   = [];
+        this.enemyCreatures      = [];
+        this.observedProjectiles = [];
+        this.enemyProjectiles    = [];
+
+        this.type           = 'wild';
+        this.mode           = 'auto';
+        this.nature         = 'passive';
+        this.followDistance = 0;
+        this.leashDistance  = 0;
+        this.aggroRange     = 60;
+
+        this.targetFocus = null;
+        this.viable      = { move: 1, fight: 1 };
+        this.commit      = { target: 1, movePlan: 1, actionPlan: 1 };
+        this.redecide    = false;
+        this.intentRequest = this._makeEmptyIntent();
+    }
+
+    _makeEmptyIntent() {
+        return { move: { x: 0, z: 0 }, ability: null, targetId: null, aimAt: null, dodge: false };
+    }
+
+    think(world, dt) {
+        if (!this.host || this.host.isDead) return;
+        this.intentRequest = this._makeEmptyIntent();
+
+        this.scanEntities(world);
+        this.decideTarget();
+        this.decideAction();
+        this.decideMovement();
+        this.decideAbility(dt);
+        this.writeIntoHost();
+    }
+    scanEntities(world) {
+        this.observedCreatures   = [];
+        this.enemyCreatures      = [];
+        this.observedProjectiles = [];
+        this.enemyProjectiles    = [];
+
+        const h  = this.host;
+        const px = h.pos?.x ?? h.x;
+        const pz = h.pos?.z ?? h.z;
+        const sightRange = (h.modifiedStats?.range ?? 40) * 3; // perception range
+
+        for (const e of world.entities) {
+            if (e === h || e.isDead) continue;
+            const ex   = e.pos?.x ?? e.x;
+            const ez   = e.pos?.z ?? e.z;
+            const dist = Math.hypot(ex - px, ez - pz);
+            if (dist > sightRange) continue;
+
+            this.observedCreatures.push({ entity: e, dist });
+            if (e.team !== h.team) this.enemyCreatures.push({ entity: e, dist });
+        }
+
+        for (const p of world.projectiles ?? []) {
+            if (p.team === h.team) continue;
+            const dist = Math.hypot((p.x - px), (p.z - pz));
+            if (dist < sightRange) this.enemyProjectiles.push({ proj: p, dist });
+        }
+    }
+
+    _scoreTarget(enemyEntry) {
+        const { entity: e, dist } = enemyEntry;
+        // Prefer hurt enemies, then close ones
+        const hpRatio  = (e.currentHP ?? e.modifiedStats.maxHP) / (e.modifiedStats.maxHP || 1);
+        const distNorm = dist / 200; // normalise to ~0-1 over 200 units
+        return hpRatio * 0.5 + distNorm * 0.5;
+    }
+
+    decideTarget() {
+        if (this.enemyCreatures.length === 0) {
+            this.targetFocus = null;
+            return;
+        }
+
+        if (this.targetFocus && !this.targetFocus.isDead) {
+            const stillSeen = this.enemyCreatures.find(e => e.entity === this.targetFocus);
+            if (stillSeen) return;
+        }
+
+        let best = null, bestScore = Infinity;
+        for (const entry of this.enemyCreatures) {
+            const score = this._scoreTarget(entry);
+            if (score < bestScore) { bestScore = score; best = entry.entity; }
+        }
+        this.targetFocus = best;
+    }
+
+    decideAction() {
+        const h = this.host;
+        if (!this.targetFocus || this.nature === 'passive') {
+            this.viable.fight = 0;
+            this.viable.move  = 1;
+            return;
+        }
+
+        const hpRatio = (h.currentHP ?? 1) / (h.modifiedStats?.maxHP || 1);
+
+        if (hpRatio < 0.25) {
+            this.viable.fight = -1; 
+            this.viable.move  = 1;
+            return;
+        }
+
+        // Check incoming projectile threat
+        const incomingThreat = this.enemyProjectiles.some(p => p.dist < 30);
+        if (incomingThreat) this.intentRequest.dodge = true;
+
+        this.viable.fight = 1;
+        this.viable.move  = 1;
+    }
+    decideMovement() {
+        const h  = this.host;
+        const px = h.pos?.x ?? h.x;
+        const pz = h.pos?.z ?? h.z;
+
+        if (!this.targetFocus) {
+            this.intentRequest.move = { x: 0, z: 0 };
+            return;
+        }
+
+        const tx   = this.targetFocus.pos?.x ?? this.targetFocus.x;
+        const tz   = this.targetFocus.pos?.z ?? this.targetFocus.z;
+        const dist = Math.hypot(tx - px, tz - pz);
+        const dx   = (tx - px) / (dist || 1);
+        const dz   = (tz - pz) / (dist || 1);
+
+        const attackRange = h.modifiedStats?.range ?? 20;
+
+        if (this.viable.fight === -1) {
+            // Flee: move directly away
+            this.intentRequest.move = { x: -dx, z: -dz };
+        } else if (dist > attackRange) {
+            // Chase
+            this.intentRequest.move = { x: dx, z: dz };
+        } else {
+            // In range — hold position
+            this.intentRequest.move = { x: 0, z: 0 };
+        }
+    }
+
+    decideAbility(dt) {
+        if (this.viable.fight !== 1 || !this.targetFocus) return;
+
+        const h   = this.host;
+        const px  = h.pos?.x ?? h.x;
+        const pz  = h.pos?.z ?? h.z;
+        const tx  = this.targetFocus.pos?.x ?? this.targetFocus.x;
+        const tz  = this.targetFocus.pos?.z ?? this.targetFocus.z;
+        const dist = Math.hypot(tx - px, tz - pz);
+
+        for (const key in h.cooldowns) {
+            if (h.cooldowns[key] > 0) h.cooldowns[key] -= dt * 100; // dt in seconds → hundredths
+        }//might move to abilitymanager or similar
+
+        let bestKey = null, bestScore = -Infinity;
+
+        for (const key of (h.moveset ?? [])) {
+            const ability = abilities[key];
+            if (!ability) continue;
+            if ((h.cooldowns[key] ?? 0) > 0) continue;
+            const rangeArg = ability.args?.find(a => a.maxCastRange !== undefined);
+            const castRange = rangeArg?.maxCastRange ?? 999;
+            if (dist > castRange) continue;
+            const energyCost = ability.flatDmg?.e ?? 0;
+            if (energyCost > 0 && (h.currentEnergy ?? 0) < energyCost) continue;
+            const dmgScore = (ability.flatDmg?.p ?? 0)  + (ability.flatDmg?.e ?? 0)
+                           + (ability.dmgScale?.p ?? 0) * (h.modifiedStats?.pAtk ?? 0)
+                           + (ability.dmgScale?.e ?? 0) * (h.modifiedStats?.eAtk ?? 0);
+
+            if (dmgScore > bestScore) { bestScore = dmgScore; bestKey = key; }
+        }
+
+        if (bestKey) {
+            this.intentRequest.ability  = bestKey;
+            this.intentRequest.targetId = this.targetFocus.id;
+            this.intentRequest.aimAt    = { x: tx, z: tz };
+        }
+    }
+    writeIntoHost() {
+        const h = this.host;
+        h.intent = { ...this.intentRequest };
+    }
+    attachTo(creature) {
+        this.host = creature;
+        creature.brain = this;
     }
 }
