@@ -1,6 +1,8 @@
 const canvas = document.getElementById("canvas");
 const ctx    = canvas.getContext("2d");
 
+const consList = []
+
 //helpers
 function clamp(v,min,max){
     return Math.max(min,Math.min(max,v))
@@ -216,28 +218,32 @@ const specialEffects = {
 }
 const abilities = {
     ram: {
-        name: "ram", category: "melee", flatDmg: {p: 10, e: 0}, dmgScale: {p: 0.5, e: 0}, cooldown: 100,
+        name: "Ram", category: "melee", flatDmg: {p: 10, e: 0}, dmgScale: {p: 0.5, e: 0}, cooldown: 100, resourceUse: {stamina: 5, energy: 0},
         effects: [], soakAdd: [], args: [{maxCastRange:25}, {dash: {spd: 10, decay: "none"}}]//life? maybe until it actually hits
     },
     frostAOEInst: {
-        name: "Frost Churn", category: "AOEInstant", flatDmg: {p: 0, e: 5}, dmgScale: {p: 0, e: 0.75}, cooldown: 200,
+        name: "Frost Churn", category: "AOEInstant", flatDmg: {p: 0, e: 5}, dmgScale: {p: 0, e: 0.75}, cooldown: 200, resourceUse: {stamina: 0, energy: 15},
         effects: [], soakAdd: [{}], args: [{delayStart:10}, {maxCastRange:50}, {radius:50}, {pos: "fixed"}] //args arbitrary until theres a function/class to process it
     },
     frostAOELinger: {
-        name: "Frost Wind", category: "AOELinger", flatDmg: {p: 0, e: 1}, dmgScale: {p: 0, e: 0.2}, cooldown: 200,
+        name: "Frost Wind", category: "AOELinger", flatDmg: {p: 0, e: 1}, dmgScale: {p: 0, e: 0.2}, cooldown: 200, resourceUse: {stamina: 0, energy: 15},
         effects: [], soakAdd: [], args: [{delayStart:0}, {maxCastRange:50}, {radius:50}, {pos: "anchorToEntity"}, {dps: 20}, {life: 100}] //just for planning, etc
     },
     zap: {
-        name: "Zap", category: "Hitscan", flatDmg: {p: 0, e: 20}, dmgScale: {p: 0, e: 0.8}, cooldown: 100,
+        name: "Zap", category: "Hitscan", flatDmg: {p: 0, e: 20}, dmgScale: {p: 0, e: 0.8}, cooldown: 100, resourceUse: {stamina: 0, energy: 5},
         effects: [], soakAdd: [{electric:3}], args: []
-    }
+    },
+    stonethrow: {
+        name: "StoneThrow", category: "Hitscan", flatDmg: {p: 2, e: 0}, dmgScale: {p: 0.2, e: 0}, cooldown: 100, resourceUse: {stamina: 2, energy: 0},
+        effects: [], soakAdd: [], args: []
+    },
 }
 const temporary = { //lazy
-    baseStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
-    morphStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 10, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
-    maxVariation: {pAtk: 5, eAtk: 5, maxHP:20, spd: 10, castSpd: 50, range: 0, size: 5, stamina: 10, energy: 10},
+    baseStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 40, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
+    morphStats: {pAtk: 10, eAtk: 0, maxHP:100, spd: 40, castSpd: 100, range: 10, size: 10, stamina: 20, energy: 0},
+    maxVariation: {pAtk: 5, eAtk: 5, maxHP:20, spd: 40, castSpd: 50, range: 0, size: 5, stamina: 10, energy: 10},
     levelUp: {pAtk: 2, eAtk: 2, maxHP:10, spd: 5, castSpd: 10, range: 1, size: 1, stamina: 5, energy: 5},
-    baseMoveset: ["ram"]
+    baseMoveset: ["ram", "stonethrow"]
 }
 const species = {
     dog: {
@@ -298,41 +304,15 @@ class Camera {
     update(dt) {
         if (!this.target) return;
         const lerp = 10 * dt;
-        this.x += (this.target.x - this.x) * lerp;
-        this.z += (this.target.z - this.z) * lerp;
+        this.x += (this.target.pos.x - this.x) * lerp;
+        this.z += (this.target.pos.z - this.z) * lerp;
     }
 }
-class World {
-    constructor(space) {
-        this.space       = space;
-        this.entities    = [];
-        this.projectiles = [];
-        this.areaEffects = [];
-        this.spawnField = null;
-    }
-    addEntity(e)      { this.entities.push(e);      return e; }
-    addProjectile(p)  { this.projectiles.push(p);   return p; }
-    addAreaEffect(a)  { this.areaEffects.push(a);   return a; }
-    setSpawnField(field) {this.spawnField = field;}
-    update(dt) {
-        if (this.spawnField) {
-            this.spawnField.update(dt);
-        }
-        this.entities.forEach(e    => e.update(dt, this));
-        this.projectiles.forEach(p => p.update(dt, this));
-        this.areaEffects.forEach(a => a.update(dt, this));
-
-        this.entities    = this.entities.filter(e => e.alive);
-        this.projectiles = this.projectiles.filter(p => p.alive);
-        this.areaEffects = this.areaEffects.filter(a => a.alive);
-    }
-    draw(ctx, camera) {
-        ctx.fillStyle = "#6aa56a";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        this.areaEffects.forEach(a => a.draw(ctx, camera));
-        this.entities.forEach(e    => e.draw(ctx, camera));
-        this.projectiles.forEach(p => p.draw(ctx, camera));
-    }
+function toScreen(wx, wz, camera) {
+    return {
+        sx: (wx - camera.x) * camera.zoom + canvas.width  / 2,
+        sz: (wz - camera.z) * camera.zoom + canvas.height / 2,
+    };
 }
 class SpawnField {
     constructor(world, player, options = {}) {
@@ -403,7 +383,7 @@ const MorphService = {
         if (!MorphService.canMorph(creature, morphKey)) return false;
         const spec = species[creature.species];
         const morph = spec.morphs.stage1[morphKey];
-        creature.composites = morph.composite;
+        creature.composites = deepClone(morph.composite);
         creature.morphPath = morphKey;
         creature.morphStage = 1;
 
@@ -501,6 +481,179 @@ class Creature{
         this.tempCapCold = 0;   // max negative temp deviation (stored as positive)
         this.tempRatio   = null; // derived each tick
     }
+    tick(world, dt) {
+        if (this.isDead) return;
+        if (!this.abilityManager) return;
+
+        this.abilityManager.tick(dt);
+
+        this.currentStamina = Math.min(
+            this.modifiedStats?.stamina ?? 0,
+            (this.currentStamina ?? 0) + (this.recovery?.stamina ?? 0) * dt
+        );
+        this.currentEnergy = Math.min(
+            this.modifiedStats?.energy ?? 0,
+            (this.currentEnergy ?? 0) + (this.recovery?.energy ?? 0) * dt
+        );
+        const intent = this.intent;
+        if (!intent) return;
+        const spd = this.modifiedStats?.spd ?? 0;
+        this.vel.x = intent.move.x * spd;
+        this.vel.z = intent.move.z * spd;
+        this.pos.x += this.vel.x * dt;
+        this.pos.z += this.vel.z * dt;
+
+        this.pos.x = clamp(this.pos.x, 0, 1000);
+        this.pos.z = clamp(this.pos.z, 0,1000);
+
+        if (intent.move.x !== 0 || intent.move.z !== 0) {
+            this.angle = Math.atan2(intent.move.z, intent.move.x);
+        }
+        // Fire ability if brain chose one
+        if (intent.ability && intent.aimAt) {
+            this.abilityManager.use(intent.ability, world, intent.aimAt);
+        }
+    }
+}
+class AbilityManager {
+    constructor(creature) {
+        this.host      = creature;
+        this.cooldowns = {};  // key → remaining cooldown (same units as abilities.cooldown)
+        this.slots     = [null, null, null, null]; // up to 4 keyed ability slots
+    }
+    // Called by CreatureFactory after moveset is rolled
+    initFromMoveset(movesetKeys) {
+        this.cooldowns = {};
+        this.slots = [null, null, null, null];
+        movesetKeys.forEach((key, i) => {
+            if (i < 4) this.slots[i] = key;
+            this.cooldowns[key] = 0;
+        });
+        // Keep creature.cooldowns in sync for Brain compatibility
+        this.host.cooldowns = this.cooldowns;
+        this.host.moveset   = movesetKeys;
+    }
+    tick(dt) {
+        for (const key in this.cooldowns) {
+            if (this.cooldowns[key] > 0) {
+                this.cooldowns[key] = Math.max(0, this.cooldowns[key] - dt * 100);
+            }
+        }
+    }
+    canUse(key) {
+        const ability = abilities[key];
+        if (!ability) return false;
+        if ((this.cooldowns[key] ?? 0) > 0) return false;
+
+        const h    = this.host;
+        const cost = ability.resourceUse ?? {};
+        if ((cost.stamina ?? 0) > 0 && (h.currentStamina ?? 0) < cost.stamina) return false;
+        if ((cost.energy  ?? 0) > 0 && (h.currentEnergy  ?? 0) < cost.energy)  return false;
+
+        return true;
+    }
+
+    use(key, world, aimAt, targetId) {
+        if (!this.canUse(key)) return false;
+
+        const ability = abilities[key];
+        const h       = this.host;
+        const cost    = ability.resourceUse ?? {};
+
+        h.currentStamina = Math.max(0, (h.currentStamina ?? 0) - (cost.stamina ?? 0));
+        h.currentEnergy  = Math.max(0, (h.currentEnergy  ?? 0) - (cost.energy  ?? 0));
+        this.cooldowns[key] = ability.cooldown;
+        this._execute(key, ability, world, aimAt, targetId);
+        return true;
+    }
+    _execute(key, ability, world, aimAt) {
+        const h = this.host;
+        if (ability.category === "melee") {
+            // Instant hit on target in range
+            const rangeArg  = ability.args?.find(a => a.maxCastRange !== undefined);
+            const castRange = rangeArg?.maxCastRange ?? h.modifiedStats?.range ?? 20;
+            const targets   = this._entitiesInRadius(world, aimAt, castRange);
+            for (const target of targets) {
+                if (target === h || target.team === h.team) continue;
+                const dmg = (ability.flatDmg?.p ?? 0)
+                          + (ability.dmgScale?.p ?? 0) * (h.modifiedStats?.pAtk ?? 0);
+                applyDamage(target, dmg, "physical", ability);
+                break; // melee hits one target
+            }
+
+        } else if (ability.category === "Hitscan") {
+            // Find target by ID for instant hit — aimAt is just the aim direction hint
+            const target = world.entities.find(e => {
+                const c = e.creature ?? e;
+                return c.id === (h.intent?.targetId ?? -1) && !c.isDead;
+            });
+            if (!target) return;
+            const c = target.creature ?? target;
+            if (c.team === h.team) return;
+
+            const dmg = (ability.flatDmg?.p ?? 0)
+                    + (ability.dmgScale?.p ?? 0) * (h.modifiedStats?.pAtk ?? 0)
+                    + (ability.flatDmg?.e ?? 0)
+                    + (ability.dmgScale?.e ?? 0) * (h.modifiedStats?.eAtk ?? 0);
+            applyDamage(c, dmg, ability.flatDmg?.p > 0 ? "physical" : "energy", ability);
+
+            for (const soakMap of (ability.soakAdd ?? [])) {
+                for (const [soakType, amount] of Object.entries(soakMap)) {
+                    applySoak(c, soakType, amount);
+                }
+            }
+        } else if (ability.category === "AOEInstant") {
+            const radiusArg = ability.args?.find(a => a.radius !== undefined);
+            const radius    = radiusArg?.radius ?? 40;
+            const targets   = this._entitiesInRadius(world, aimAt ?? h.pos, radius);
+
+            for (const target of targets) {
+                if (target === h || target.team === h.team) continue;
+                const dmg = (ability.flatDmg?.e ?? 0)
+                          + (ability.dmgScale?.e ?? 0) * (h.modifiedStats?.eAtk ?? 0);
+                applyDamage(target, dmg, "energy", ability);
+            }
+        }
+    }
+
+    _entitiesInRadius(world, center, radius) {
+        const cx = center?.x ?? 0;
+        const cz = center?.z ?? 0;
+        const results = [];
+        for (const e of world.entities ?? []) {
+            const ex = e.creature?.pos?.x ?? e.pos?.x ?? e.x ?? 0;
+            const ez = e.creature?.pos?.z ?? e.pos?.z ?? e.z ?? 0;
+            if (Math.hypot(ex - cx, ez - cz) <= radius) results.push(e.creature ?? e);
+        }
+        return results;
+    }
+}
+function applyDamage(target, amount, type, ability) {
+    if (amount <= 0 || target.isDead) return;
+
+    let scale = 0;
+    const comps = getCompositeList(target);
+    for (const key of comps) {
+        scale += (type === "physical")
+            ? (composites[key].effectiveness?.physical ?? 1)
+            : (composites[key].effectiveness?.energy   ?? 1);
+    }
+    scale /= comps.length;
+    const finalDmg = amount * scale;
+    target.currentHP = Math.max(0, (target.currentHP ?? 0) - finalDmg);
+    if (target.currentHP <= 0) target.isDead = true;
+}
+function applySoak(target, soakType, amount) {
+    if (!(soakType in (target.soaks ?? {}))) return;
+    const cap = target.soakCap?.[soakType] ?? 0;
+    target.soaks[soakType] = Math.min(cap, (target.soaks[soakType] ?? 0) + amount);
+}
+function getCompositeList(creature) {
+    const c = creature.composites;
+    if (!c) return [];
+    const inner = Array.isArray(c.inner) ? c.inner : [c.inner];
+    const outer = Array.isArray(c.outer) ? c.outer : [c.outer];
+    return [...inner, ...outer];
 }
 function getTempState(creature) {
     const ratio = creature.tempRatio; // baseline + offset
@@ -554,7 +707,7 @@ class CreatureFactory{
         creature.level = 1;
         creature.baseStats = stats;
         creature.modifiedStats = { ...stats };
-        creature.composites = comp;
+        creature.composites = deepClone(comp);
         creature.morphStage = 0;
         creature.morphPath = null; // e.g. "armoredDog" once morphed
 
@@ -579,6 +732,8 @@ class CreatureFactory{
         creature.moveset = moveset;
         creature.cooldowns = {};
         moveset.forEach(key => creature.cooldowns[key] = 0);
+        creature.abilityManager = new AbilityManager(creature);
+        creature.abilityManager.initFromMoveset(moveset);
 
         // 8. Active status effects
         creature.statusEffects = [];
@@ -691,30 +846,30 @@ class TemporaryArena {
 
         this.time = 0;
         this.round = 0;
+        this.camera = { x: this.width / 2, z: this.height / 2, zoom: 0.8 };
     }
-
     initTeams() {
         this.teamList = [];
         this.allCreatures = [];
 
         for (let teamID = 0; teamID < this.teamNumber; teamID++) {
             const team = [];
-
             for (let j = 0; j < this.entityOnEach; j++) {
-                const factory = new CreatureFactory("dog", "arena", teamID, this.teamNumber);
+                const factory  = new CreatureFactory("dog", "arena", teamID, this.teamNumber);
                 const creature = factory.createEntity();
-
-                creature.team = teamID;
+                creature.team      = teamID;
                 creature.arenaSlot = j;
+
+                const brain = new Brain();
+                brain.nature = 'aggressive'; // arena creatures always fight
+                brain.attachTo(creature);
 
                 team.push(creature);
                 this.allCreatures.push(creature);
             }
-
             this.teamList.push(team);
         }
     }
-
     placeTeams() {
         const centerX = this.width / 2;
         const centerZ = this.height / 2;
@@ -726,17 +881,14 @@ class TemporaryArena {
 
             const teamCenterX = centerX + Math.cos(teamAngle) * teamRadius;
             const teamCenterZ = centerZ + Math.sin(teamAngle) * teamRadius;
-
             for (let i = 0; i < team.length; i++) {
                 const creature = team[i];
                 const offset = (i - (team.length - 1) / 2) * 30;
-
                 creature.pos.x = teamCenterX + Math.cos(teamAngle + Math.PI / 2) * offset;
                 creature.pos.z = teamCenterZ + Math.sin(teamAngle + Math.PI / 2) * offset;
             }
         }
     }
-
     start() {
         this.initTeams();
         this.placeTeams();
@@ -746,11 +898,9 @@ class TemporaryArena {
         this.time = 0;
         this.round = 1;
     }
-
     getLivingCreatures() {
         return this.allCreatures.filter(c => !c.isDead);
     }
-
     getLivingTeams() {
         return this.teamList
             .map((team, index) => ({
@@ -759,35 +909,27 @@ class TemporaryArena {
             }))
             .filter(t => t.members.length > 0);
     }
-
     getEnemiesOf(creature) {
         return this.getLivingCreatures().filter(c => c.team !== creature.team);
     }
-
     findNearestEnemy(creature) {
         const enemies = this.getEnemiesOf(creature);
         if (enemies.length === 0) return null;
-
         let best = enemies[0];
         let bestDist = Infinity;
-
         for (const enemy of enemies) {
             const dx = enemy.pos.x - creature.pos.x;
             const dz = enemy.pos.z - creature.pos.z;
             const dist = Math.hypot(dx, dz);
-
             if (dist < bestDist) {
                 bestDist = dist;
                 best = enemy;
             }
         }
-
         return best;
     }
-
     checkWinner() {
         const livingTeams = this.getLivingTeams();
-
         if (livingTeams.length <= 1) {
             this.ended = true;
             this.winnerTeam = livingTeams.length === 1 ? livingTeams[0].teamID : null;
@@ -796,24 +938,27 @@ class TemporaryArena {
 
         return false;
     }
-
     step(dt) {
         if (!this.started || this.ended) return;
         this.time += dt;
-        for (const creature of this.getLivingCreatures()) {
-            const target = this.findNearestEnemy(creature);
-            if (!target) continue;
 
+        for (const creature of this.getLivingCreatures()) {
+            if (creature.brain) {
+                creature.brain.think(this, dt); // ← pass arena as "world", fix missing dt
+            }
+            creature.tick(this, dt);
         }
 
         this.checkWinner();
     }
-
+    get entities() { return this.allCreatures; }
+    get projectiles() { return []; }
     run(maxSteps = 1000, dt = 0.1) {
         let steps = 0;
 
         while (!this.ended && steps < maxSteps) {
             this.step(dt);
+            this.draw()
             steps++;
         }
 
@@ -822,6 +967,120 @@ class TemporaryArena {
             winnerTeam: this.winnerTeam,
             steps
         };
+    }
+    draw(camera = this.camera) {
+        const W = canvas.width, H = canvas.height;
+        const zoom = camera.zoom;
+
+        const toSX = (wx) => (wx - camera.x) * zoom + W / 2;
+        const toSZ = (wz) => (wz - camera.z) * zoom + H / 2;
+
+        // Background
+        ctx.fillStyle = "#899c89";
+        ctx.fillRect(0, 0, W, H);
+
+        // Arena boundary
+        const bx = toSX(0), bz = toSZ(0);
+        const bw = this.width * zoom, bh = this.height * zoom;
+        ctx.strokeStyle = "#555";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(bx, bz, bw, bh);
+
+        // Team colors — extend if you add more teams
+        const teamColors = ["#4a90d9", "#e05c5c", "#5cb85c", "#f0ad4e"];
+
+        for (const creature of this.allCreatures) {
+            const sx = toSX(creature.pos.x);
+            const sz = toSZ(creature.pos.z);
+            const radius = Math.max(4, (creature.modifiedStats?.size ?? 10) * 0.4 * zoom);
+
+            // Dead creatures — draw faded X
+            if (creature.isDead) {
+                ctx.globalAlpha = 0.3;
+                ctx.strokeStyle = teamColors[creature.team] ?? "#aaa";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(sx - radius, sz - radius); ctx.lineTo(sx + radius, sz + radius);
+                ctx.moveTo(sx + radius, sz - radius); ctx.lineTo(sx - radius, sz + radius);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                continue;
+            }
+
+            // Direction indicator (facing angle)
+            const faceLen = radius + 4;
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(sx, sz);
+            ctx.lineTo(sx + Math.cos(creature.angle) * faceLen, sz + Math.sin(creature.angle) * faceLen);
+            ctx.stroke();
+
+            // Body circle
+            ctx.fillStyle = teamColors[creature.team] ?? "#888";
+            ctx.beginPath();
+            ctx.arc(sx, sz, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Target line (thin, semi-transparent)
+            if (creature.brain?.targetFocus && !creature.brain.targetFocus.isDead) {
+                const tx = toSX(creature.brain.targetFocus.pos.x);
+                const tz = toSZ(creature.brain.targetFocus.pos.z);
+                ctx.strokeStyle = "rgba(255,255,100,0.2)";
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(sx, sz);
+                ctx.lineTo(tx, tz);
+                ctx.stroke();
+            }
+
+            // HP bar
+            const maxHP = creature.modifiedStats?.maxHP ?? 1;
+            const hpRatio = clamp((creature.currentHP ?? 0) / maxHP, 0, 1);
+            const barW = radius * 2.5, barH = 4;
+            const barX = sx - barW / 2, barY = sz - radius - 10;
+
+            ctx.fillStyle = "#333";
+            ctx.fillRect(barX, barY, barW, barH);
+            ctx.fillStyle = hpRatio > 0.5 ? "#5cb85c" : hpRatio > 0.25 ? "#f0ad4e" : "#e05c5c";
+            ctx.fillRect(barX, barY, barW * hpRatio, barH);
+
+            // Stamina bar (below HP, dimmer)
+            const maxSt = creature.modifiedStats?.stamina ?? 1;
+            const stRatio = clamp((creature.currentStamina ?? 0) / maxSt, 0, 1);
+            ctx.fillStyle = "#222";
+            ctx.fillRect(barX, barY + barH + 1, barW, 3);
+            ctx.fillStyle = "#7ec8e3";
+            ctx.fillRect(barX, barY + barH + 1, barW * stRatio, 3);
+
+            // ID label
+            ctx.fillStyle = "#fff";
+            ctx.font = `${Math.max(9, 11 * zoom)}px monospace`;
+            ctx.textAlign = "center";
+            ctx.fillText(`#${creature.id}`, sx, sz + radius + 12);
+        }
+
+        // HUD — step/time counter
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(8, 8, 180, 48);
+        ctx.fillStyle = "#eee";
+        ctx.font = "12px monospace";
+        ctx.textAlign = "left";
+        ctx.fillText(`time:  ${this.time.toFixed(1)}s`, 16, 26);
+        ctx.fillText(`alive: ${this.getLivingCreatures().length} / ${this.allCreatures.length}`, 16, 44);
+
+        // Winner banner
+        if (this.ended) {
+            ctx.fillStyle = "rgba(0,0,0,0.55)";
+            ctx.fillRect(0, H / 2 - 36, W, 72);
+            ctx.fillStyle = "#fff";
+            ctx.font = "bold 28px monospace";
+            ctx.textAlign = "center";
+            const msg = this.winnerTeam !== null
+                ? `Team ${this.winnerTeam} wins!`
+                : "Draw!";
+            ctx.fillText(msg, W / 2, H / 2 + 10);
+        }
     }
 }
 class Brain {
@@ -870,7 +1129,7 @@ class Brain {
         const h  = this.host;
         const px = h.pos?.x ?? h.x;
         const pz = h.pos?.z ?? h.z;
-        const sightRange = (h.modifiedStats?.range ?? 40) * 3; // perception range
+        const sightRange = (h.modifiedStats?.range ?? 40) * 100; // perception range
 
         for (const e of world.entities) {
             if (e === h || e.isDead) continue;
@@ -903,7 +1162,6 @@ class Brain {
             this.targetFocus = null;
             return;
         }
-
         if (this.targetFocus && !this.targetFocus.isDead) {
             const stillSeen = this.enemyCreatures.find(e => e.entity === this.targetFocus);
             if (stillSeen) return;
@@ -919,12 +1177,11 @@ class Brain {
 
     decideAction() {
         const h = this.host;
-        if (!this.targetFocus || this.nature === 'passive') {
-            this.viable.fight = 0;
-            this.viable.move  = 1;
-            return;
-        }
-
+        // if (!this.targetFocus || this.nature === 'passive') {
+        //     this.viable.fight = 0;
+        //     this.viable.move  = 1;
+        //     return;
+        // }
         const hpRatio = (h.currentHP ?? 1) / (h.modifiedStats?.maxHP || 1);
 
         if (hpRatio < 0.25) {
@@ -933,7 +1190,6 @@ class Brain {
             return;
         }
 
-        // Check incoming projectile threat
         const incomingThreat = this.enemyProjectiles.some(p => p.dist < 30);
         if (incomingThreat) this.intentRequest.dodge = true;
 
@@ -946,7 +1202,11 @@ class Brain {
         const pz = h.pos?.z ?? h.z;
 
         if (!this.targetFocus) {
-            this.intentRequest.move = { x: 0, z: 0 };
+            if (this.wanderEnable){
+                this.intentRequest.move = { x: Math.random(), z: Math.random() };
+            } else{
+                this.intentRequest.move = { x: 0, z: 0 };
+            }
             return;
         }
 
@@ -980,10 +1240,6 @@ class Brain {
         const tz  = this.targetFocus.pos?.z ?? this.targetFocus.z;
         const dist = Math.hypot(tx - px, tz - pz);
 
-        for (const key in h.cooldowns) {
-            if (h.cooldowns[key] > 0) h.cooldowns[key] -= dt * 100; // dt in seconds → hundredths
-        }//might move to abilitymanager or similar
-
         let bestKey = null, bestScore = -Infinity;
 
         for (const key of (h.moveset ?? [])) {
@@ -993,12 +1249,12 @@ class Brain {
             const rangeArg = ability.args?.find(a => a.maxCastRange !== undefined);
             const castRange = rangeArg?.maxCastRange ?? 999;
             if (dist > castRange) continue;
-            const energyCost = ability.flatDmg?.e ?? 0;
-            if (energyCost > 0 && (h.currentEnergy ?? 0) < energyCost) continue;
+            const cost = ability.resourceUse ?? {};
+            if ((cost.stamina ?? 0) > (h.currentStamina ?? 0)) continue;
+            if ((cost.energy  ?? 0) > (h.currentEnergy  ?? 0)) continue;
             const dmgScore = (ability.flatDmg?.p ?? 0)  + (ability.flatDmg?.e ?? 0)
                            + (ability.dmgScale?.p ?? 0) * (h.modifiedStats?.pAtk ?? 0)
                            + (ability.dmgScale?.e ?? 0) * (h.modifiedStats?.eAtk ?? 0);
-
             if (dmgScore > bestScore) { bestScore = dmgScore; bestKey = key; }
         }
 
@@ -1017,3 +1273,21 @@ class Brain {
         creature.brain = this;
     }
 }
+
+let arena = new TemporaryArena(2, 3);
+arena.start();
+
+let lastTime = null;
+function loop(ts) {
+    const dt = lastTime ? Math.min((ts - lastTime) / 1000, 0.05) : 0.016;
+    lastTime = ts;
+
+    if (!arena.ended) {
+        arena.step(dt);
+        arena.draw();
+        requestAnimationFrame(loop);
+    } else {
+        arena.draw(); // draw final state with winner banner
+    }
+}
+requestAnimationFrame(loop);
