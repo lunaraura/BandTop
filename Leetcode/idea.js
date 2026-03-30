@@ -673,3 +673,27 @@ console.log("after morph:", c.composites, c.soakCap, c.tempCapHot);
 
 LevelService.addXP(c, 100);
 console.log("after level up:", c.level, c.modifiedStats);
+
+class TemporaryArena {
+    constructor(teams, entOnEach){
+        this.teamNumber = teams;
+        this.teamList = [];
+        this.entityOnEach = entOnEach;
+    }
+    initTeams(){
+        let teamID = 0;
+        for(let i = 0; i < this.teamNumber; i++){
+            let team = [];
+            for(let j = 0; j < this.entityOnEach; j++){
+                const factory = new CreatureFactory("dog", "arena", teamID, this.teamNumber);
+                const creature = factory.createEntity();
+                team.push(creature);
+            }
+            this.teamList.push(team);
+            teamID++;
+        }
+    }
+    run(){
+        
+    }
+}
