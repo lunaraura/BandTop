@@ -675,25 +675,158 @@ LevelService.addXP(c, 100);
 console.log("after level up:", c.level, c.modifiedStats);
 
 class TemporaryArena {
-    constructor(teams, entOnEach){
+    constructor(teams, entOnEach, options = {}) {
         this.teamNumber = teams;
-        this.teamList = [];
         this.entityOnEach = entOnEach;
+
+        this.teamList = [];
+        this.allCreatures = [];
+
+        this.width = options.width ?? 1000;
+        this.height = options.height ?? 1000;
+
+        this.started = false;
+        this.ended = false;
+        this.winnerTeam = null;
+
+        this.time = 0;
+        this.round = 0;
     }
-    initTeams(){
-        let teamID = 0;
-        for(let i = 0; i < this.teamNumber; i++){
-            let team = [];
-            for(let j = 0; j < this.entityOnEach; j++){
+
+    initTeams() {
+        this.teamList = [];
+        this.allCreatures = [];
+
+        for (let teamID = 0; teamID < this.teamNumber; teamID++) {
+            const team = [];
+
+            for (let j = 0; j < this.entityOnEach; j++) {
                 const factory = new CreatureFactory("dog", "arena", teamID, this.teamNumber);
                 const creature = factory.createEntity();
+
+                creature.team = teamID;
+                creature.arenaSlot = j;
+
                 team.push(creature);
+                this.allCreatures.push(creature);
             }
+
             this.teamList.push(team);
-            teamID++;
         }
     }
-    run(){
-        
+
+    placeTeams() {
+        const centerX = this.width / 2;
+        const centerZ = this.height / 2;
+        const teamRadius = Math.min(this.width, this.height) * 0.35;
+
+        for (let teamID = 0; teamID < this.teamList.length; teamID++) {
+            const team = this.teamList[teamID];
+            const teamAngle = (teamID / this.teamList.length) * Math.PI * 2;
+
+            const teamCenterX = centerX + Math.cos(teamAngle) * teamRadius;
+            const teamCenterZ = centerZ + Math.sin(teamAngle) * teamRadius;
+
+            for (let i = 0; i < team.length; i++) {
+                const creature = team[i];
+                const offset = (i - (team.length - 1) / 2) * 30;
+
+                creature.pos.x = teamCenterX + Math.cos(teamAngle + Math.PI / 2) * offset;
+                creature.pos.z = teamCenterZ + Math.sin(teamAngle + Math.PI / 2) * offset;
+            }
+        }
+    }
+
+    start() {
+        this.initTeams();
+        this.placeTeams();
+        this.started = true;
+        this.ended = false;
+        this.winnerTeam = null;
+        this.time = 0;
+        this.round = 1;
+    }
+
+    getLivingCreatures() {
+        return this.allCreatures.filter(c => !c.isDead);
+    }
+
+    getLivingTeams() {
+        return this.teamList
+            .map((team, index) => ({
+                teamID: index,
+                members: team.filter(c => !c.isDead)
+            }))
+            .filter(t => t.members.length > 0);
+    }
+
+    getEnemiesOf(creature) {
+        return this.getLivingCreatures().filter(c => c.team !== creature.team);
+    }
+
+    findNearestEnemy(creature) {
+        const enemies = this.getEnemiesOf(creature);
+        if (enemies.length === 0) return null;
+
+        let best = enemies[0];
+        let bestDist = Infinity;
+
+        for (const enemy of enemies) {
+            const dx = enemy.pos.x - creature.pos.x;
+            const dz = enemy.pos.z - creature.pos.z;
+            const dist = Math.hypot(dx, dz);
+
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = enemy;
+            }
+        }
+
+        return best;
+    }
+
+    checkWinner() {
+        const livingTeams = this.getLivingTeams();
+
+        if (livingTeams.length <= 1) {
+            this.ended = true;
+            this.winnerTeam = livingTeams.length === 1 ? livingTeams[0].teamID : null;
+            return true;
+        }
+
+        return false;
+    }
+
+    step(dt) {
+        if (!this.started || this.ended) return;
+
+        this.time += dt;
+
+        // placeholder: later call creature AI / ability resolution / movement
+        for (const creature of this.getLivingCreatures()) {
+            const target = this.findNearestEnemy(creature);
+            if (!target) continue;
+
+            // example placeholder behavior:
+            // creature.updateArenaIntent?.(this, target, dt);
+            // creature.tickArena?.(this, dt);
+        }
+
+        this.checkWinner();
+    }
+
+    run(maxSteps = 1000, dt = 0.1) {
+        let steps = 0;
+
+        while (!this.ended && steps < maxSteps) {
+            this.step(dt);
+            steps++;
+        }
+
+        return {
+            ended: this.ended,
+            winnerTeam: this.winnerTeam,
+            steps
+        };
     }
 }
