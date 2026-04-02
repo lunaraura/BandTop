@@ -672,7 +672,6 @@ const BiomeSystem = {
     },
     getBiomeAt(x, z) {
         const key = this.getBiomeKeyAt(x, z);
-        console.log('Biome key:', key);
         if (!biomeDefs[key]) {
             console.warn('No biome data for key:', key);
             return null;
@@ -762,13 +761,21 @@ class PlayerEntity {
         this.reserveOwnedIds = [];
         this.ownedCreatures  = [];
         this.lastLog         = "";
+        this.itemBar = ["berry_red", "battery_seed", "lure_meat", "revive_berry"];
+        this.selectedItemIndex = 0;
+    }
+    get selectedItemKey() {
+        return this.itemBar[this.selectedItemIndex] ?? null;
     }
 
+    cycleItem(dir) {
+        const len = this.itemBar.length;
+        if (!len) return;
+        this.selectedItemIndex = (this.selectedItemIndex + dir + len) % len;
+    }
     get activePetId() {
         return this.petIds[this.activePetIndex] ?? null;
     }
-
-    // Returns whichever IDs the current selectAll state covers
     get targetPetIds() {
         return this.selectAll
             ? this.petIds.filter(Boolean)
@@ -788,6 +795,9 @@ class PlayerEntity {
         this.pos.x = clamp(this.pos.x + this.vel.x * dt, 0, world.width);
         this.pos.z = clamp(this.pos.z + this.vel.z * dt, 0, world.height);
 
+        //eventually replace pet and item selection
+        // with menus to scroll index and choose
+
         // ── Pet selection ─────────────────────────────────────
         if (input.consumePress("Digit1")) { this.activePetIndex = 0; this.selectAll = false; }
         if (input.consumePress("Digit2")) { this.activePetIndex = 1; this.selectAll = false; }
@@ -798,7 +808,9 @@ class PlayerEntity {
             this.selectAll = !this.selectAll;
             this.lastLog = this.selectAll ? "All pets selected" : `Pet ${this.activePetIndex + 1} selected`;
         }
-
+        if (input.consumePress("BracketLeft")) this.cycleItem(-1);
+        if (input.consumePress("BracketRight")) this.cycleItem(1);
+        if (input.consumePress("KeyZ")) this.useSelectedItem(world);
         // ── Stance cycle ──────────────────────────────────────
         if (input.consumePress("KeyQ")) {
             const cycle = { aggressive: "follow", follow: "hold", hold: "aggressive" };
@@ -822,13 +834,6 @@ class PlayerEntity {
             this.issueCommand(world, { type: "follow", issuedAt: world.time });
             this.lastLog = `${this.selectAll ? "All" : "Active"} pet: follow`;
         }
-
-        // Items that target pets respect selectAll
-        if (input.consumePress("KeyZ")) this.useItemOnTargets(world, "berry_red");
-        if (input.consumePress("KeyX")) this.useItemOnTargets(world, "battery_seed");
-        if (input.consumePress("KeyC")) this.useItemOnTargets(world, "lure_meat");
-        // Tame always targets wild — selectAll doesn't apply
-        if (input.consumePress("KeyV")) world.useItem("lure_meat", "wildTarget");
 
         // ── World interaction ─────────────────────────────────
         if (input.consumePress("KeyG")) world.tryInteractNearestNode();
@@ -1150,37 +1155,29 @@ class World {
         const def = itemDefs[itemKey];
         if (!def) return false;
         if ((this.player.inventory[itemKey] ?? 0) <= 0) return false;
-            const targetCreature = typeof targetMode === "number"
-        ? this.getCreatureById(targetMode)
-        : targetMode === "activePet"
-            ? this.getCreatureById(this.player.activePetId)
-            : null;
-
-        if (targetMode === "activePet") {
-            const pet = this.getCreatureById(this.player.activePetId);
-            if (!pet || pet.lifecycle !== "alive") return false;
+        const targetCreature =
+            typeof targetMode === "number"
+                ? this.getCreatureById(targetMode)
+                : targetMode === "activePet"
+                    ? this.getCreatureById(this.player.activePetId)
+                    : null;
+        if (targetCreature && targetCreature.lifecycle === "alive") {
             if (def.type === "heal") {
-                pet.currentHP = Math.min(pet.modifiedStats.maxHP, pet.currentHP + def.amount);
-                this.pushFloatingText(pet.pos.x, pet.pos.z - 16, `+${def.amount} HP`, "#8dff9d");
+                targetCreature.currentHP = Math.min(
+                    targetCreature.modifiedStats.maxHP,
+                    targetCreature.currentHP + def.amount
+                );
+                this.pushFloatingText(targetCreature.pos.x, targetCreature.pos.z - 16, `+${def.amount} HP`, "#8dff9d");
             }
+
             if (def.type === "energy") {
-                pet.currentEnergy = Math.min(pet.modifiedStats.energy, pet.currentEnergy + def.amount);
-                pet.currentStamina = Math.min(pet.modifiedStats.stamina, pet.currentStamina + (def.stamina ?? 0));
-                this.pushFloatingText(pet.pos.x, pet.pos.z - 16, "+energy", "#9de7ff");
+                targetCreature.currentEnergy = Math.min(targetCreature.modifiedStats.energy, targetCreature.currentEnergy + def.amount);
+                targetCreature.currentStamina = Math.min(targetCreature.modifiedStats.stamina, targetCreature.currentStamina + (def.stamina ?? 0));
             }
-            if (def.type === "bait") {
-                this.player.lastLog = "Bait ready - use V on weakened wild";
-            }
-            if (def.type === "boost") {
-                pet.intent.abilityKey = def.boostAbility;
-                pet.intent.targetId = pet.id;
-                pet.intent.aimAt = { x: pet.pos.x, z: pet.pos.z };
-                this.player.lastLog = "Boosting active pet";
-            }
+
             if (def.type === "revive") {
-                pet.currentHP = Math.min(pet.modifiedStats.maxHP, def.amount);
-                pet.lifecycle = "alive";
-                this.pushFloatingText(pet.pos.x, pet.pos.z - 16, "Revived!", "#ff8a8a");
+                targetCreature.currentHP = Math.min(targetCreature.modifiedStats.maxHP, def.amount);
+                targetCreature.lifecycle = "alive";
             }
         }
         if (targetMode === "wildTarget") {
@@ -1421,6 +1418,7 @@ class World {
             ctx.fillRect(s.sx - 16, s.sz - 20, 32, 4);
             ctx.fillStyle = hpRatio > 0.5 ? "#5ad15a" : hpRatio > 0.25 ? "#e7c04a" : "#df5a5a";
             ctx.fillRect(s.sx - 16, s.sz - 20, 32 * hpRatio, 4);
+            
 
             if (c.team === 0) {
                 ctx.fillStyle = "#fff";
@@ -1428,15 +1426,16 @@ class World {
                 ctx.fillText(`Lv${c.level}`, s.sx - 12, s.sz - 25);
             }
         }
-
         for (const fx of this.floatingTexts) {
             const s = this.camera.worldToScreen(fx.x, fx.z);
             ctx.fillStyle = fx.color;
             ctx.font = "12px monospace";
             ctx.fillText(fx.text, s.sx - 10, s.sz);
         }
-
         const biome = BiomeSystem.getBiomeAt(this.player.pos.x, this.player.pos.z).key;
+        this.HUDDraw(biome)
+    }
+    HUDDraw(biome){
         ctx.fillStyle = "rgba(0,0,0,0.56)";
         ctx.fillRect(8, 8, 420, 122);
         ctx.fillStyle = "#fff";
@@ -1446,10 +1445,13 @@ class World {
         const cmd = activePet?.command?.type ?? "none";
         ctx.fillText(`Biome: ${biome}`, 16, 26);
         ctx.fillText(`Active Pet: ${this.player.activePetIndex + 1} cmd:${cmd} stance:${this.player.stance}`, 16, 44);
-        ctx.fillText(`Inv berry:${this.player.inventory.berry_red ?? 0} battery:${this.player.inventory.battery_seed ?? 0} lure:${this.player.inventory.lure_meat ?? 0}`, 16, 62);
-        ctx.fillText(`1/2/3 switch | Q stance | LMB attack | RMB move | R regroup | H hold | F follow`, 16, 80);
+const itemKey = this.player.selectedItemKey;
+const itemDef = itemDefs[itemKey];
+const itemCount = itemKey ? (this.player.inventory[itemKey] ?? 0) : 0;
+ctx.fillText(`Selected Item: ${itemDef?.name ?? "None"} x${itemCount}`, 16, 62);        ctx.fillText(`1/2/3 switch | Q stance | LMB attack | RMB move | R regroup | H hold | F follow`, 16, 80);
         ctx.fillText(`Z heal | X energy | V tame target | G gather | T swap reserve | ${this.player.lastLog}`, 16, 98);
         ctx.fillText(`Reserve: ${this.player.reserveOwnedIds.length}`, 16, 116);
+ctx.fillText(`PetIDs: ${this.player.petIds.join(",")}`, 16, 132);
     }
 }
 
@@ -1459,38 +1461,41 @@ class World {
 class Game {
     constructor() {
         this.input = new InputManager();
-        this.world = new World();
+        this.sceneManager = new SceneManager(
+            { mainScene: new Scene() },
+            "mainScene"
+        );
         this.last = 0;
     }
+
     start() {
         this.input.bind(canvas);
-        this.world.initialize();
         requestAnimationFrame((ts) => this.loop(ts));
     }
+
     loop(ts) {
         const dt = this.last ? Math.min((ts - this.last) / 1000, 0.05) : 0.016;
         this.last = ts;
-        this.world.update(dt, this.input);
-        this.world.draw(ctx);
+
+        this.sceneManager.update(dt, this.input);
+        this.sceneManager.draw(ctx);
         this.input.endFrame();
+
         requestAnimationFrame((next) => this.loop(next));
     }
 }
-class SceneManager{
-    constructor(defs, startId, player) {
+
+class SceneManager {
+    constructor(defs, startId) {
         this.defs = defs;
         this.id = null;
         this.scene = null;
         this.t = 0;
         this.state = {};
         this._events = [];
-
-        this.clickables = new Set();
-        this.runTimeEntities = new Set();
-        this.player = player;
-
         this.set(startId);
     }
+
     set(id, payload = {}) {
         if (this.scene?.onExit) this.scene.onExit(this, payload);
         this.id = id;
@@ -1499,14 +1504,10 @@ class SceneManager{
         this.state = {};
         this._events = [];
         if (!this.scene) throw new Error(`Unknown scene: ${id}`);
-        if (this.scene.onEnter) this.scene.onEnter(this, this.player, payload);
-        this.reloadClickables();
+        if (this.scene.onEnter) this.scene.onEnter(this, payload);
     }
-    at(timeSec, fn) {
-        this._events.push({ t: timeSec, fn, fired: false });
-        this._events.sort((a, b) => a.t - b.t);
-    }
-    update(dt) {
+
+    update(dt, input) {
         this.t += dt;
         for (const ev of this._events) {
             if (!ev.fired && this.t >= ev.t) {
@@ -1514,27 +1515,30 @@ class SceneManager{
                 ev.fn(this);
             }
         }
-        if (this.scene?.update) this.scene.update(this, dt);
+        if (this.scene?.update) this.scene.update(this, dt, input);
     }
-    reloadClickables() {
-        this.clickables.clear();
-        for (const e of this.entities) e.addToClickable?.(this);
-        if (this.scene?.addClickables) this.scene.addClickables(this);
+
+    draw(ctx) {
+        if (this.scene?.draw) this.scene.draw(this, ctx);
     }
-    goto(id, payload) { this.set(id, payload); }
 }
 
 class Scene {
-    constructor(){
-        //world nests into scene or other way?
-        this.messageQueue = [];
-        this.messageIndex = 0;
+    constructor() {
+        this.world = new World();
     }
-    onEnter(sm, player, payload ){}
-    onEnter(sm, player, payload ){}
-    rebuildClickables(){}
 
+    onEnter(sm, payload) {
+        this.world.initialize();
+    }
 
+    update(sm, dt, input) {
+        this.world.update(dt, input);
+    }
+
+    draw(sm, ctx) {
+        this.world.draw(ctx);
+    }
 }
 const game = new Game();
 game.start();
