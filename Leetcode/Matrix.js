@@ -70,6 +70,34 @@ function raycastFace(rayOrigin, dir, mesh){
     }
     return bestHit ? {point: bestHit, normal: bestN} : null;
 }
+function enhanceMeshResolution(rigidBody, divideByN){
+    if (divideByN < 2 && divideByN > 6) return;
+    const newTriangles = [];
+    const newCloud = [];
+    for(let tri of rigidBody.cloudTriangles){
+        const v0 = rigidBody.vertices[tri[0]];
+        const v1 = rigidBody.vertices[tri[1]];
+        const v2 = rigidBody.vertices[tri[2]];
+        const edge01 = mul3(sub3(v1, v0), 1/divideByN);
+        const edge12 = mul3(sub3(v2, v1), 1/divideByN);
+        const edge20 = mul3(sub3(v0, v2), 1/divideByN);
+        for(let i=0; i<divideByN; i++){
+            for(let j=0; j<divideByN - i; j++){
+                const a = add3(v0, mul3(edge01, i));
+                const b = add3(v0, mul3(edge01, i+1));
+                const c = add3(a, mul3(edge12, j));
+                const d = add3(b, mul3(edge12, j));
+                newTriangles.push([a, c, d]);
+                if (j < divideByN - i - 1){
+                    const e = add3(c, mul3(edge20, 1));
+                    newTriangles.push([a, d, e]);
+                }
+            }
+        }
+    }
+    rigidBody.baseCloud = newTriangles;
+}
+
 function isBackFace(mesh, tri, camera){
     const viewMatrix = camera.getViewMatrix();
     const a = transformPoint(viewMatrix, mesh.vertices[tri[0]]);
@@ -200,17 +228,6 @@ class RigidBody{
         this.currentCloud = this.vertices.map(p => [p[0], p[1], p[2]]);
     }
 }
-
-const predefinedShapes = {
-    cube: [
-        v(-1,-1,-1), v(1,-1,-1), v(1,1,-1), v(-1,1,-1),
-        v(-1,-1,1), v(1,-1,1), v(1,1,1), v(-1,1,1)
-    ],
-    cubeUncentered: [
-        v(0,0,0), v(2,0,0), v(2,2,0), v(0,2,0),
-        v(0,0,2), v(2,0,2), v(2,2,2), v(0,2,2)
-    ]
-}
 const predefinedShapesTwo = {
     cube: {
         vertices: [
@@ -222,7 +239,7 @@ const predefinedShapesTwo = {
 
         faceIndex: [
             [0,1,2,3], //bot
-            [6,5,4,7], //top
+            // [6,5,4,7], //top
             [0,4,5,1], //right
             [6,7,3,2], //left
             [6,2,1,5], // front
@@ -327,8 +344,12 @@ document.getElementById("canvas").addEventListener("click", (e) => {
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
-    const rayTarget = [(mouseX / canvas.width) * 2 - 1, -(mouseY / canvas.height) * 2 + 1, 1];
-    const rayDir = normalize3(transformPoint(camera.getViewMatrix(), rayTarget));
+    const rayTarget = [
+        (mouseX / canvas.width) * 2 - 1,
+        -(mouseY / canvas.height) * 2 + 1,
+        1
+    ];
+    const rayDir = normalize3( rayTarget);
     const hit = raycastFace(camera.pos, rayDir, cube);
     if (hit) {
         console.log("Hit at:", hit.point, "Normal:", hit.normal);
@@ -349,6 +370,9 @@ const camera = new Camera();
 const cube = new RigidBody();
 const pyramid = new RigidBody();
 cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
+//resolution enhancement test
+const enhancedMesh = predefinedShapesTwo.cube.faceIndex.flatMap(face => triangulateFace(face)).map(tri => tri.map(i => predefinedShapesTwo.cube.vertices[i]));
+cube.triangles = enhancedMesh;
 cube.pos = v(0,0,5);
 cube.rot = v(0.6,0.1,0.0);
 cube.scale = 3;
@@ -364,8 +388,7 @@ function animateDebug(){
         obj.update();
         draw(obj);
     });
-    pyramid.rot[1] += 0.01;
-    drawNormalAtHit();
+    pyramid.rot[1] += 0.001;
     requestAnimationFrame(animateDebug);
 }
 animateDebug();
