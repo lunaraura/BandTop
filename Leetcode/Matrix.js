@@ -70,7 +70,14 @@ function raycastFace(rayOrigin, dir, mesh){
     }
     return bestHit ? {point: bestHit, normal: bestN} : null;
 }
-
+function isBackFace(mesh, tri, camera){
+    const viewMatrix = camera.getViewMatrix();
+    const a = transformPoint(viewMatrix, mesh.vertices[tri[0]]);
+    const b = transformPoint(viewMatrix, mesh.vertices[tri[1]]);
+    const c = transformPoint(viewMatrix, mesh.vertices[tri[2]]);
+    const n = normalize3(cross3(sub3(b, a), sub3(c, a)));
+    return n[2] < 0; // backface if normal points away from camera
+}
 const vAdd = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2], 0];
 const vSub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2], 0];
 const vMul = (v, s) => [v[0]*s, v[1]*s, v[2]*s, 0];
@@ -144,7 +151,7 @@ class Camera{
             [f/aspect, 0, 0, 0],
             [0, f, 0, 0],
             [0, 0, (100+near)/(near-100), (2*100*near)/(near-100)],
-            [0, 0, -1, 0]
+            [0, 0, 1, 0]
         ];
         const viewMatrix = this.getViewMatrix();
         const transformed = matMult(projectionMatrix, matMult(viewMatrix, [[point[0]], [point[1]], [point[2]], [1]]));
@@ -221,6 +228,18 @@ const predefinedShapesTwo = {
             [6,2,1,5], // front
             [0,3,7,4] // back
         ]
+    },
+    pyramid: {
+        vertices: [
+            v3(0,1,0), v3(-1,-1,-1), v3(1,-1,-1), v3(1,-1,1), v3(-1,-1,1)
+        ],
+        faceIndex: [
+            [0,1,2], // front
+            [0,2,3], // right
+            [0,3,4], // back
+            [0,4,1], // left
+            [1,4,3,2] // bottom
+        ]
     }
 }
 
@@ -237,14 +256,6 @@ const fillPolygon = (points, color) => {
     ctx.closePath();
     ctx.fill();
 }
-
-const camera = new Camera();
-const cube = new RigidBody();
-cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
-cube.pos = v(0,0,5);
-cube.rot = v(0.6,0.1,0.0);
-cube.scale = 3;
-
 
 function raycastNormal(point){
     const dir = normalize3(sub3(point, camera.pos));
@@ -273,9 +284,10 @@ function sortFacesByDepth(mesh, camera){
         return bZ - aZ; // sort back to front
     });
 }
-function draw(){
-    const projectedPoints = cube.currentCloud.map(point => camera.project(point));
-    sortFacesByDepth(cube, camera);
+
+function draw(obj){
+    const projectedPoints = obj.currentCloud.map(point => camera.project(point));
+    sortFacesByDepth(obj, camera);
     ctx.beginPath();
     let ind = 0
     let colorInd = {
@@ -287,7 +299,8 @@ function draw(){
         5: "magenta",
         6: "white"
     }
-    for(let tri of cube.triangles){
+    for(let tri of obj.triangles){
+        if (isBackFace(obj, tri, camera)) continue; // backface culling
         const p1 = camToCanvas(projectedPoints[tri[0]]);
         const p2 = camToCanvas(projectedPoints[tri[1]]);
         const p3 = camToCanvas(projectedPoints[tri[2]]);
@@ -323,11 +336,26 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "e") cube.rot[1] += step;
 });
 
+const camera = new Camera();
+const cube = new RigidBody();
+const pyramid = new RigidBody();
+cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
+cube.pos = v(0,0,5);
+cube.rot = v(0.6,0.1,0.0);
+cube.scale = 3;
+pyramid.buildMesh(predefinedShapesTwo.pyramid.vertices, predefinedShapesTwo.pyramid.faceIndex);
+pyramid.pos = v(2,0,5);
+pyramid.rot = v(0.6,0.1,0.0);
+pyramid.scale = 3;
+let objs = [cube, pyramid];
+
 function animateDebug(){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    cube.update();
-    draw();
+    objs.forEach(obj => {
+        obj.update();
+        draw(obj);
+    });
+    pyramid.rot[1] += 0.01;
     drawNormalAtHit();
     requestAnimationFrame(animateDebug);
 }
