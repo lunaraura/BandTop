@@ -284,12 +284,20 @@ function sortFacesByDepth(mesh, camera){
         return bZ - aZ; // sort back to front
     });
 }
-
+function getTrianglesSortedByDepth(mesh, camera){
+    const viewMatrix = camera.getViewMatrix();
+    return [...mesh.triangles].sort((triA, triB) => {
+        const aZ = (transformPoint(viewMatrix, mesh.vertices[triA[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[2]])[2]) / 3;
+        const bZ = (transformPoint(viewMatrix, mesh.vertices[triB[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[2]])[2]) / 3;
+        return bZ - aZ; // sort back to front
+    });
+}
 function draw(obj){
     const projectedPoints = obj.currentCloud.map(point => camera.project(point));
-    sortFacesByDepth(obj, camera);
-    ctx.beginPath();
+    const sortedTriangles = getTrianglesSortedByDepth(obj, camera);
+    
     let ind = 0
+    ctx.beginPath();
     let colorInd = {
         0: "red",
         1: "green",
@@ -299,7 +307,7 @@ function draw(obj){
         5: "magenta",
         6: "white"
     }
-    for(let tri of obj.triangles){
+    for(let tri of sortedTriangles){
         if (isBackFace(obj, tri, camera)) continue; // backface culling
         const p1 = camToCanvas(projectedPoints[tri[0]]);
         const p2 = camToCanvas(projectedPoints[tri[1]]);
@@ -319,7 +327,8 @@ document.getElementById("canvas").addEventListener("click", (e) => {
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
-    const rayDir = normalize3(sub3([mouseX / canvas.width * 2 - 1, -(mouseY / canvas.height * 2 - 1), 1], camera.pos));
+    const rayTarget = [(mouseX / canvas.width) * 2 - 1, -(mouseY / canvas.height) * 2 + 1, 1];
+    const rayDir = normalize3(transformPoint(camera.getViewMatrix(), rayTarget));
     const hit = raycastFace(camera.pos, rayDir, cube);
     if (hit) {
         console.log("Hit at:", hit.point, "Normal:", hit.normal);
