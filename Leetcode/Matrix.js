@@ -522,3 +522,185 @@ function animateDebug(){
     requestAnimationFrame(animateDebug);
 }
 animateDebug();
+
+function updateCameraAndScreenVertices(obj, camera){
+    const src = obj.world;
+    const cam = obj.camera;
+    const scr = obj.screen;
+
+    const rx = -camera.rot[0];
+    const ry = -camera.rot[1];
+    const rz = -camera.rot[2];
+
+    const cx = Math.cos(rx), sx = Math.sin(rx);
+    const cy = Math.cos(ry), sy = Math.sin(ry);
+    const cz = Math.cos(rz), sz = Math.sin(rz);
+
+    for (let i = 0, j = 0; i < src.length; i += 3, j += 2){
+        let x = src[i]     - camera.pos[0];
+        let y = src[i + 1] - camera.pos[1];
+        let z = src[i + 2] - camera.pos[2];
+
+        // inverse camera X rotation
+        let y1 = y * cx - z * sx;
+        let z1 = y * sx + z * cx;
+        let x1 = x;
+
+        // inverse camera Y rotation
+        let x2 = x1 * cy + z1 * sy;
+        let z2 = -x1 * sy + z1 * cy;
+        let y2 = y1;
+
+        // inverse camera Z rotation
+        let x3 = x2 * cz - y2 * sz;
+        let y3 = x2 * sz + y2 * cz;
+        let z3 = z2;
+
+        cam[i]     = x3;
+        cam[i + 1] = y3;
+        cam[i + 2] = z3;
+
+        if (z3 <= camera.near) {
+            scr[j] = 0;
+            scr[j + 1] = 0;
+            continue;
+        }
+
+        const ndcX = (x3 * camera.f / camera.aspect) / z3;
+        const ndcY = (y3 * camera.f) / z3;
+
+        scr[j]     = (ndcX + 1) * canvas.width * 0.5;
+        scr[j + 1] = (1 - ndcY) * canvas.height * 0.5;
+    }
+}
+function enhanceMeshResolution(rigidBody, divideByN){
+    if (divideByN < 2 || divideByN > hardlimitResolution) return;
+
+    const oldBase = rigidBody.base;
+    const oldTris = rigidBody.triangles;
+
+    const newVerts = [];
+    const newTris = [];
+    const step = 1 / divideByN;
+
+    for (let t = 0; t < oldTris.length; t += 3) {
+        const i0 = oldTris[t];
+        const i1 = oldTris[t + 1];
+        const i2 = oldTris[t + 2];
+
+        const a0 = oldBase[i0 * 3],     a1 = oldBase[i0 * 3 + 1],     a2 = oldBase[i0 * 3 + 2];
+        const b0 = oldBase[i1 * 3],     b1 = oldBase[i1 * 3 + 1],     b2 = oldBase[i1 * 3 + 2];
+        const c0 = oldBase[i2 * 3],     c1 = oldBase[i2 * 3 + 1],     c2 = oldBase[i2 * 3 + 2];
+
+        const rowStart = [];
+        const baseVertex = newVerts.length / 3;
+
+        let count = 0;
+        for (let u = 0; u <= divideByN; u++) {
+            rowStart[u] = count;
+            count += divideByN - u + 1;
+        }
+
+        for (let u = 0; u <= divideByN; u++) {
+            for (let v = 0; v <= divideByN - u; v++) {
+                const uu = u * step;
+                const vv = v * step;
+                const w = 1 - uu - vv;
+
+                newVerts.push(
+                    a0 * w + b0 * uu + c0 * vv,
+                    a1 * w + b1 * uu + c1 * vv,
+                    a2 * w + b2 * uu + c2 * vv
+                );
+            }
+        }
+
+        for (let u = 0; u < divideByN; u++) {
+            for (let v = 0; v < divideByN - u; v++) {
+                const A = baseVertex + rowStart[u] + v;
+                const B = baseVertex + rowStart[u + 1] + v;
+                const C = baseVertex + rowStart[u] + v + 1;
+
+                newTris.push(A, B, C);
+
+                if (v < divideByN - u - 1) {
+                    const D = baseVertex + rowStart[u + 1] + v + 1;
+                    newTris.push(C, B, D);
+                }
+            }
+        }
+    }
+
+    rigidBody.base = new Float32Array(newVerts);
+    rigidBody.world = new Float32Array(newVerts.length);
+    rigidBody.camera = new Float32Array(newVerts.length);
+    rigidBody.screen = new Float32Array((newVerts.length / 3) * 2);
+    rigidBody.triangles = new Uint32Array(newTris);
+}
+function getTriangleNormalCamera(obj, i0, i1, i2){
+    const cam = obj.camera;
+
+    const ai = i0 * 3;
+    const bi = i1 * 3;
+    const ci = i2 * 3;
+
+    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
+    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
+    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
+
+    const abx = bx - ax, aby = by - ay, abz = bz - az;
+    const acx = cx - ax, acy = cy - ay, acz = cz - az;
+
+    let nx = aby * acz - abz * acy;
+    let ny = abz * acx - abx * acz;
+    let nz = abx * acy - aby * acx;
+
+    const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+    if (len > 0) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+    }
+
+    return [nx, ny, nz, ax, ay, az];
+}
+
+function isBackFaceCamera(obj, i0, i1, i2){
+    const n = getTriangleNormalCamera(obj, i0, i1, i2);
+
+    const nx = n[0];
+    const ny = n[1];
+    const nz = n[2];
+
+    const ax = n[3];
+    const ay = n[4];
+    const az = n[5];
+
+    return (nx * ax + ny * ay + nz * az) <= 0;
+}
+function getTriangleLight(obj, i0, i1, i2){
+    const n = getTriangleNormalCamera(obj, i0, i1, i2);
+
+    const nx = n[0];
+    const ny = n[1];
+    const nz = n[2];
+
+    // Directional light in camera space.
+    // This means the light follows the camera.
+    const lx = -0.4;
+    const ly = -0.7;
+    const lz = 1.0;
+
+    const len = Math.sqrt(lx*lx + ly*ly + lz*lz);
+    const nlx = lx / len;
+    const nly = ly / len;
+    const nlz = lz / len;
+
+    let intensity = nx * nlx + ny * nly + nz * nlz;
+
+    const ambient = 0.25;
+    intensity = Math.max(0, intensity);
+    intensity = ambient + intensity * (1 - ambient);
+
+    return intensity;
+}
