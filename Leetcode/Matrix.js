@@ -79,7 +79,7 @@ function enhanceMeshResolution(rigidBody, divideByN){
     }
     for (let tri of oldTriangles){
         const a = oldVertices[tri[0]];
-        const b = oldVertices[tri[1]];
+        const b = oldVerticestri[1];
         const c = oldVertices[tri[2]];
         const grid = [];
         for (let i = 0; i <= divideByN; i++){
@@ -203,15 +203,19 @@ class RigidBody{
         for (const p of vertices){
             flat.push(p[0],p[1],p[2])
         }
+        const flatTris = []
+        for (const face of faces){
+            const tris = triangulateFace(face);
+            for (const tri of tris){
+                flatTris.push(tri[0], tri[1], tri[2]);
+            }
+        }
         this.base = new Float32Array(flat)
         this.world = new Float32Array(flat.length)
         this.camera = new Float32Array(flat.length)
         this.screen = new Float32Array((flat.length/3)*2)
         
-        this.triangles = []
-        for (const f of faces){
-            this.triangles.push(...triangulateFace(f))
-        }
+        this.triangles = new Uint32Array(flatTris)
     }
 }
 const predefinedShapesTwo = {
@@ -255,9 +259,9 @@ const predefinedShapesTwo = {
 }
 function isBackFaceCamera(obj, tri){
     const cam = obj.camera;
-    const ai = [tri[0]]*3;
-    const bi = [tri[1]]*3;
-    const ci = [tri[2]]*3;
+    const ai = tri[0]*3;
+    const bi = tri[1]*3;
+    const ci = tri[2]*3;
     const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
     const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
     const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
@@ -270,9 +274,9 @@ function isBackFaceCamera(obj, tri){
 }
 function triangleOutsideCameraView(obj, tri, camera){
     const cam = obj.camera;
-    const ai = [tri[0]]*3;
-    const bi = [tri[1]]*3;
-    const ci = [tri[2]]*3;
+    const ai = tri[0]*3;
+    const bi = tri[1]*3;
+    const ci = tri[2]*3;
     const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
     const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
     const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
@@ -322,6 +326,10 @@ function updateCameraAndScreenVertices(obj, camera){
         const x = src[i] - camera.pos[0];
         const y = src[i+1] - camera.pos[1];
         const z = src[i+2] - camera.pos[2];
+        const cosY = Math.cos(-camera.rot[1]);
+        const sinY = Math.sin(-camera.rot[1]);
+        const cosX = Math.cos(-camera.rot[0]);
+
         cam[i] = x;
         cam[i+1] = y;
         cam[i+2] = z;
@@ -370,12 +378,12 @@ function buildDrawingList(objs, camera){
         const obj = objs[objIndex];
         const cam = obj.camera;
         for (let triIndex = 0; triIndex < obj.triangles.length; triIndex++){
-            const tri = obj.triangles[triIndex];
+            const i0 = obj.triangles[triIndex];
+            const i1 = obj.triangles[triIndex + 1];
+            const i2 = obj.triangles[triIndex + 2];
             if (isBackFaceCamera(obj, tri) || triangleOutsideCameraView(obj, tri, camera)) continue;
-            const ai = [tri[0]]*3;
-            const bi = [tri[1]]*3;
-            const ci = [tri[2]]*3;
-            const z = (cam[ai+2] + cam[bi+2] + cam[ci+2]) / 3;
+            const z = (cam[i0*3+2] + cam[i1*3+2] + cam[i2*3+2]) / 3;
+            
             drawList.push({obj, tri, z});
         }
     }
