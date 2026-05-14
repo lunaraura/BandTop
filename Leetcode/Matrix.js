@@ -69,51 +69,67 @@ function raycastFace(rayOrigin, dir, mesh){
 const hardlimitResolution = 10;
 function enhanceMeshResolution(rigidBody, divideByN){
     if (divideByN < 2 || divideByN > hardlimitResolution) return;
-    const newVertices = [];
-    const newFaces = [];
+
+    const oldBase = rigidBody.base;
+    const oldTris = rigidBody.triangles;
+
+    const newVerts = [];
+    const newTris = [];
     const step = 1 / divideByN;
-    const faceCount = rigidBody.triangles.length / 3;
-    for (let faceIndex = 0; faceIndex < faceCount; faceIndex++){
-        const i0 = rigidBody.triangles[faceIndex * 3];
-        const i1 = rigidBody.triangles[faceIndex * 3 + 1];
-        const i2 = rigidBody.triangles[faceIndex * 3 + 2];
-        const v0 = rigidBody.base.slice(i0 * 3, i0 * 3 + 3);
-        const v1 = rigidBody.base.slice(i1 * 3, i1 * 3 + 3);
-        const v2 = rigidBody.base.slice(i2 * 3, i2 * 3 + 3);
-        const faceVertexBase = newVertices.length;
-        const rowStart = new Array(divideByN + 2);
-        for (let r = 0; r <= divideByN; r++){
-            rowStart[r] = (r * (2 * divideByN - r + 3)) / 2;
+
+    for (let t = 0; t < oldTris.length; t += 3) {
+        const i0 = oldTris[t];
+        const i1 = oldTris[t + 1];
+        const i2 = oldTris[t + 2];
+
+        const a0 = oldBase[i0 * 3],     a1 = oldBase[i0 * 3 + 1],     a2 = oldBase[i0 * 3 + 2];
+        const b0 = oldBase[i1 * 3],     b1 = oldBase[i1 * 3 + 1],     b2 = oldBase[i1 * 3 + 2];
+        const c0 = oldBase[i2 * 3],     c1 = oldBase[i2 * 3 + 1],     c2 = oldBase[i2 * 3 + 2];
+
+        const rowStart = [];
+        const baseVertex = newVerts.length / 3;
+
+        let count = 0;
+        for (let u = 0; u <= divideByN; u++) {
+            rowStart[u] = count;
+            count += divideByN - u + 1;
         }
 
-        for (let u = 0; u <= divideByN; u++){
-            for (let v = 0; v <= divideByN - u; v++){
+        for (let u = 0; u <= divideByN; u++) {
+            for (let v = 0; v <= divideByN - u; v++) {
                 const uu = u * step;
                 const vv = v * step;
                 const w = 1 - uu - vv;
-                const newVertex = [
-                    v0[0] * w + v1[0] * uu + v2[0] * vv,
-                    v0[1] * w + v1[1] * uu + v2[1] * vv,
-                    v0[2] * w + v1[2] * uu + v2[2] * vv
-                ];
-                newVertices.push(newVertex);
+
+                newVerts.push(
+                    a0 * w + b0 * uu + c0 * vv,
+                    a1 * w + b1 * uu + c1 * vv,
+                    a2 * w + b2 * uu + c2 * vv
+                );
             }
         }
 
-        for (let u = 0; u < divideByN; u++){
-            for (let v = 0; v < divideByN - u; v++){
-                const iA = faceVertexBase + rowStart[u] + v;
-                const iB = faceVertexBase + rowStart[u + 1] + v;
-                const iC = faceVertexBase + rowStart[u] + v + 1;
-                const iD = faceVertexBase + rowStart[u + 1] + v + 1;
-                newFaces.push([iA, iB, iC]);
-                if (v < divideByN - u - 1){
-                    newFaces.push([iC, iB, iD]);
+        for (let u = 0; u < divideByN; u++) {
+            for (let v = 0; v < divideByN - u; v++) {
+                const A = baseVertex + rowStart[u] + v;
+                const B = baseVertex + rowStart[u + 1] + v;
+                const C = baseVertex + rowStart[u] + v + 1;
+
+                newTris.push(A, B, C);
+
+                if (v < divideByN - u - 1) {
+                    const D = baseVertex + rowStart[u + 1] + v + 1;
+                    newTris.push(C, B, D);
                 }
             }
         }
     }
-    rigidBody.buildMesh(newVertices, newFaces);
+
+    rigidBody.base = new Float32Array(newVerts);
+    rigidBody.world = new Float32Array(newVerts.length);
+    rigidBody.camera = new Float32Array(newVerts.length);
+    rigidBody.screen = new Float32Array((newVerts.length / 3) * 2);
+    rigidBody.triangles = new Uint32Array(newTris);
 }
 
 const vAdd = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2], 0];
@@ -186,12 +202,22 @@ class Camera{
         return matMult(rZ, matMult(rY, matMult(rX, t)));
     }
 }
+class Light {
+    constructor(pos, rot){
+        this.pos = pos;
+        this.rot = rot;
+        this.strength = 1;
+        this.ambient = 0.25
+        this.shadow = 0;
 
+    }
+}
 class RigidBody{
     constructor(){
         this.pos = v(0,0,0);
         this.rot = v(0,0,0);
         this.scale = 1;
+        this.baseColor = [1,1,1];
         this.base = null
         this.world = null;
         this.camera = null
@@ -259,26 +285,18 @@ const predefinedShapesTwo = {
     }
 }
 function isBackFaceCamera(obj, i0, i1, i2){
-    const cam = obj.camera;
+    const n = getTriangleNormalCamera(obj, i0, i1, i2);
 
-    const ai = i0 * 3;
-    const bi = i1 * 3;
-    const ci = i2 * 3;
+    const nx = n[0];
+    const ny = n[1];
+    const nz = n[2];
 
-    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
-    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
-    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
-
-    const abx = bx - ax, aby = by - ay, abz = bz - az;
-    const acx = cx - ax, acy = cy - ay, acz = cz - az;
-
-    const nx = aby * acz - abz * acy;
-    const ny = abz * acx - abx * acz;
-    const nz = abx * acy - aby * acx;
+    const ax = n[3];
+    const ay = n[4];
+    const az = n[5];
 
     return (nx * ax + ny * ay + nz * az) <= 0;
 }
-
 function triangleOutsideCameraView(obj, i0, i1, i2, camera){
     const cam = obj.camera;
 
@@ -308,8 +326,60 @@ function triangleOutsideCameraView(obj, i0, i1, i2, camera){
 
     return false;
 }
+function getTriangleNormalCamera(obj, i0, i1, i2){
+    const cam = obj.camera;
 
-function buildDrawingList(objs, camera){
+    const ai = i0 * 3;
+    const bi = i1 * 3;
+    const ci = i2 * 3;
+
+    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
+    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
+    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
+
+    const abx = bx - ax, aby = by - ay, abz = bz - az;
+    const acx = cx - ax, acy = cy - ay, acz = cz - az;
+
+    let nx = aby * acz - abz * acy;
+    let ny = abz * acx - abx * acz;
+    let nz = abx * acy - aby * acx;
+
+    const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+    if (len > 0) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+    }
+
+    return [nx, ny, nz, ax, ay, az];
+}
+function getTriangleLight(obj, i0, i1, i2){
+    const n = getTriangleNormalCamera(obj, i0, i1, i2);
+
+    const nx = n[0];
+    const ny = n[1];
+    const nz = n[2];
+
+    // Directional light in camera space.
+    // This means the light follows the camera.
+    const lx = -0.4;
+    const ly = -0.7;
+    const lz = 1.0;
+
+    const len = Math.sqrt(lx*lx + ly*ly + lz*lz);
+    const nlx = lx / len;
+    const nly = ly / len;
+    const nlz = lz / len;
+
+    let intensity = nx * nlx + ny * nly + nz * nlz;
+
+    const ambient = 0.25;
+    intensity = Math.max(0, intensity);
+    intensity = ambient + intensity * (1 - ambient);
+
+    return intensity;
+}
+function buildDrawingList(objs, camera, lights){
     const drawList = [];
 
     for (let objIndex = 0; objIndex < objs.length; objIndex++){
@@ -330,8 +400,7 @@ function buildDrawingList(objs, camera){
                 cam[i1 * 3 + 2] +
                 cam[i2 * 3 + 2]
             ) / 3;
-
-            drawList.push({ obj, i0, i1, i2, z });
+            drawList.push({ obj, i0, i1, i2, z , light:getTriangleLight(obj,i0,i1,i2)});
         }
     }
 
@@ -362,24 +431,50 @@ function updateWorldVertices(obj){
     }
 }
 function updateCameraAndScreenVertices(obj, camera){
-    const src = obj.world
+    const src = obj.world;
     const cam = obj.camera;
     const scr = obj.screen;
-    for (let i = 0; i < src.length; i+=3){
-        const x = src[i] - camera.pos[0];
-        const y = src[i+1] - camera.pos[1];
-        const z = src[i+2] - camera.pos[2];
-        const cosY = Math.cos(-camera.rot[1]);
-        const sinY = Math.sin(-camera.rot[1]);
-        const cosX = Math.cos(-camera.rot[0]);
 
-        cam[i] = x;
-        cam[i+1] = y;
-        cam[i+2] = z;
-        const ndcX = (x * camera.f / camera.aspect) / z;
-        const ndcY = (y * camera.f) / z;
-        scr[(i/3)*2] = (ndcX + 1) * canvas.width / 2;
-        scr[(i/3)*2 + 1] = (1 - ndcY) * canvas.height / 2;
+    const rx = -camera.rot[0];
+    const ry = -camera.rot[1];
+    const rz = -camera.rot[2];
+
+    const cx = Math.cos(rx), sx = Math.sin(rx);
+    const cy = Math.cos(ry), sy = Math.sin(ry);
+    const cz = Math.cos(rz), sz = Math.sin(rz);
+
+    for (let i = 0, j = 0; i < src.length; i += 3, j += 2){
+        let x = src[i]     - camera.pos[0];
+        let y = src[i + 1] - camera.pos[1];
+        let z = src[i + 2] - camera.pos[2];
+
+        let y1 = y * cx - z * sx;
+        let z1 = y * sx + z * cx;
+        let x1 = x;
+
+        let x2 = x1 * cy + z1 * sy;
+        let z2 = -x1 * sy + z1 * cy;
+        let y2 = y1;
+
+        let x3 = x2 * cz - y2 * sz;
+        let y3 = x2 * sz + y2 * cz;
+        let z3 = z2;
+
+        cam[i]     = x3;
+        cam[i + 1] = y3;
+        cam[i + 2] = z3;
+
+        if (z3 <= camera.near) {
+            scr[j] = 0;
+            scr[j + 1] = 0;
+            continue;
+        }
+
+        const ndcX = (x3 * camera.f / camera.aspect) / z3;
+        const ndcY = (y3 * camera.f) / z3;
+
+        scr[j]     = (ndcX + 1) * canvas.width * 0.5;
+        scr[j + 1] = (1 - ndcY) * canvas.height * 0.5;
     }
 }
 const camToCanvas = (point) => {
@@ -433,25 +528,14 @@ function drawTriangle(obj, i0, i1, i2, color){
 function drawScene(objs, camera){
     let ind = 0
     ctx.beginPath();
-    let colorInd = {
-        0: '#F00',
-        1: "#FA0",
-        2: "#FF0",
-        3: "#AF0",
-        4: "#0F0",
-        5: "#0FA",
-        6: "#0FF",
-        7: "#0AF",
-        8: "#00F",
-        9: "#A0F",
-        10: "#F0F"
-    }
-    const drawList = buildDrawingList(objs, camera);
+    const drawList = buildDrawingList(objs, camera, lights);
 
     for (const item of drawList){
-        const color = colorInd[ind % 11] || "#FFF";
-        ind++;
-        drawTriangle(item.obj, item.i0, item.i1, item.i2, color);}
+        const baseColor = item.obj.baseColor;
+        const shade = Math.floor(255 * item.light)
+        const color = `rgb(${baseColor[0] * shade}, ${baseColor[1] * shade}, ${baseColor[2] * shade})`;
+        drawTriangle(item.obj, item.i0, item.i1, item.i2, color);
+    }
 }
 document.getElementById("canvas").addEventListener("click", (e) => {
     const rect = canvas.getBoundingClientRect();
@@ -493,10 +577,11 @@ const cube = new RigidBody();
 const pyramid = new RigidBody();
 const floor = new RigidBody()
 cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
-enhanceMeshResolution(cube, 3);
+// enhanceMeshResolution(cube, 3);
 cube.pos = v(0,1,10);
 cube.rot = v(0.6,0.1,0.0);
 cube.scale = 2;
+cube.baseColor = [1,0.7,0.1]
 pyramid.buildMesh(predefinedShapesTwo.pyramid.vertices, predefinedShapesTwo.pyramid.faceIndex);
 pyramid.pos = v(2,0,5);
 pyramid.rot = v(0.6,0.1,0.0);
@@ -507,8 +592,11 @@ floor.buildMesh(predefinedShapesTwo.planeFloor.vertices, predefinedShapesTwo.pla
 floor.pos = v(0,-4,5)
 floor.rot = v(0,0,0)
 floor.scale = 6;
-let objs = [cube, pyramid, floor];
+const light = new Light();
+light.dir = normalize3([-0.4, -0.7, 1.0])
 
+let objs = [cube, pyramid, floor];
+let lights = [light]
 
 function animateDebug(){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -517,190 +605,8 @@ function animateDebug(){
         updateCameraAndScreenVertices(obj, camera)
     }
     );
-    drawScene(objs, camera);
+    drawScene(objs, camera, lights);
     pyramid.rot[1] += 0.01;
     requestAnimationFrame(animateDebug);
 }
 animateDebug();
-
-function updateCameraAndScreenVertices(obj, camera){
-    const src = obj.world;
-    const cam = obj.camera;
-    const scr = obj.screen;
-
-    const rx = -camera.rot[0];
-    const ry = -camera.rot[1];
-    const rz = -camera.rot[2];
-
-    const cx = Math.cos(rx), sx = Math.sin(rx);
-    const cy = Math.cos(ry), sy = Math.sin(ry);
-    const cz = Math.cos(rz), sz = Math.sin(rz);
-
-    for (let i = 0, j = 0; i < src.length; i += 3, j += 2){
-        let x = src[i]     - camera.pos[0];
-        let y = src[i + 1] - camera.pos[1];
-        let z = src[i + 2] - camera.pos[2];
-
-        // inverse camera X rotation
-        let y1 = y * cx - z * sx;
-        let z1 = y * sx + z * cx;
-        let x1 = x;
-
-        // inverse camera Y rotation
-        let x2 = x1 * cy + z1 * sy;
-        let z2 = -x1 * sy + z1 * cy;
-        let y2 = y1;
-
-        // inverse camera Z rotation
-        let x3 = x2 * cz - y2 * sz;
-        let y3 = x2 * sz + y2 * cz;
-        let z3 = z2;
-
-        cam[i]     = x3;
-        cam[i + 1] = y3;
-        cam[i + 2] = z3;
-
-        if (z3 <= camera.near) {
-            scr[j] = 0;
-            scr[j + 1] = 0;
-            continue;
-        }
-
-        const ndcX = (x3 * camera.f / camera.aspect) / z3;
-        const ndcY = (y3 * camera.f) / z3;
-
-        scr[j]     = (ndcX + 1) * canvas.width * 0.5;
-        scr[j + 1] = (1 - ndcY) * canvas.height * 0.5;
-    }
-}
-function enhanceMeshResolution(rigidBody, divideByN){
-    if (divideByN < 2 || divideByN > hardlimitResolution) return;
-
-    const oldBase = rigidBody.base;
-    const oldTris = rigidBody.triangles;
-
-    const newVerts = [];
-    const newTris = [];
-    const step = 1 / divideByN;
-
-    for (let t = 0; t < oldTris.length; t += 3) {
-        const i0 = oldTris[t];
-        const i1 = oldTris[t + 1];
-        const i2 = oldTris[t + 2];
-
-        const a0 = oldBase[i0 * 3],     a1 = oldBase[i0 * 3 + 1],     a2 = oldBase[i0 * 3 + 2];
-        const b0 = oldBase[i1 * 3],     b1 = oldBase[i1 * 3 + 1],     b2 = oldBase[i1 * 3 + 2];
-        const c0 = oldBase[i2 * 3],     c1 = oldBase[i2 * 3 + 1],     c2 = oldBase[i2 * 3 + 2];
-
-        const rowStart = [];
-        const baseVertex = newVerts.length / 3;
-
-        let count = 0;
-        for (let u = 0; u <= divideByN; u++) {
-            rowStart[u] = count;
-            count += divideByN - u + 1;
-        }
-
-        for (let u = 0; u <= divideByN; u++) {
-            for (let v = 0; v <= divideByN - u; v++) {
-                const uu = u * step;
-                const vv = v * step;
-                const w = 1 - uu - vv;
-
-                newVerts.push(
-                    a0 * w + b0 * uu + c0 * vv,
-                    a1 * w + b1 * uu + c1 * vv,
-                    a2 * w + b2 * uu + c2 * vv
-                );
-            }
-        }
-
-        for (let u = 0; u < divideByN; u++) {
-            for (let v = 0; v < divideByN - u; v++) {
-                const A = baseVertex + rowStart[u] + v;
-                const B = baseVertex + rowStart[u + 1] + v;
-                const C = baseVertex + rowStart[u] + v + 1;
-
-                newTris.push(A, B, C);
-
-                if (v < divideByN - u - 1) {
-                    const D = baseVertex + rowStart[u + 1] + v + 1;
-                    newTris.push(C, B, D);
-                }
-            }
-        }
-    }
-
-    rigidBody.base = new Float32Array(newVerts);
-    rigidBody.world = new Float32Array(newVerts.length);
-    rigidBody.camera = new Float32Array(newVerts.length);
-    rigidBody.screen = new Float32Array((newVerts.length / 3) * 2);
-    rigidBody.triangles = new Uint32Array(newTris);
-}
-function getTriangleNormalCamera(obj, i0, i1, i2){
-    const cam = obj.camera;
-
-    const ai = i0 * 3;
-    const bi = i1 * 3;
-    const ci = i2 * 3;
-
-    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
-    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
-    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
-
-    const abx = bx - ax, aby = by - ay, abz = bz - az;
-    const acx = cx - ax, acy = cy - ay, acz = cz - az;
-
-    let nx = aby * acz - abz * acy;
-    let ny = abz * acx - abx * acz;
-    let nz = abx * acy - aby * acx;
-
-    const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
-    if (len > 0) {
-        nx /= len;
-        ny /= len;
-        nz /= len;
-    }
-
-    return [nx, ny, nz, ax, ay, az];
-}
-
-function isBackFaceCamera(obj, i0, i1, i2){
-    const n = getTriangleNormalCamera(obj, i0, i1, i2);
-
-    const nx = n[0];
-    const ny = n[1];
-    const nz = n[2];
-
-    const ax = n[3];
-    const ay = n[4];
-    const az = n[5];
-
-    return (nx * ax + ny * ay + nz * az) <= 0;
-}
-function getTriangleLight(obj, i0, i1, i2){
-    const n = getTriangleNormalCamera(obj, i0, i1, i2);
-
-    const nx = n[0];
-    const ny = n[1];
-    const nz = n[2];
-
-    // Directional light in camera space.
-    // This means the light follows the camera.
-    const lx = -0.4;
-    const ly = -0.7;
-    const lz = 1.0;
-
-    const len = Math.sqrt(lx*lx + ly*ly + lz*lz);
-    const nlx = lx / len;
-    const nly = ly / len;
-    const nlz = lz / len;
-
-    let intensity = nx * nlx + ny * nly + nz * nlz;
-
-    const ambient = 0.25;
-    intensity = Math.max(0, intensity);
-    intensity = ambient + intensity * (1 - ambient);
-
-    return intensity;
-}
