@@ -17,10 +17,6 @@ const normalize3 = (v) => {
     return len > 0 ? [v[0]/len, v[1]/len, v[2]/len] : [0,0,0];
 }
 const dot3 = (a,b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
-function transformPoint(matrix, point){
-    const transformed = matMult(matrix, [[point[0]], [point[1]], [point[2]], [1]]);
-    return [transformed[0][0], transformed[1][0], transformed[2][0], transformed[3][0]];
-}
 function triangulateFace(face){
     const triangles = [];
     if (!face || face.length < 3) return triangles;
@@ -188,19 +184,6 @@ class Camera{
         const t = translate(-this.pos[0], -this.pos[1], -this.pos[2]);
         return matMult(rZ, matMult(rY, matMult(rX, t)));
     }
-    project(point){
-        const projectionMatrix = [
-            [this.f/this.aspect, 0, 0, 0],
-            [0, this.f, 0, 0],
-            [0, 0, (this.far+this.near)/(this.near-this.far), (2*this.far*this.near)/(this.near-this.far)],
-            [0, 0, 1, 0]
-        ];
-        const viewMatrix = this.getViewMatrix();
-        const transformed = matMult(projectionMatrix, matMult(viewMatrix, [[point[0]], [point[1]], [point[2]], [1]]));
-        const ndcX = transformed[0][0] / transformed[3][0];
-        const ndcY = transformed[1][0] / transformed[3][0];
-        return [(ndcX + 1) * canvas.width / 2, (1 - ndcY) * canvas.height / 2];
-    }
 }
 
 class RigidBody{
@@ -229,28 +212,6 @@ class RigidBody{
         for (const f of faces){
             this.triangles.push(...triangulateFace(f))
         }
-    }
-    update(){
-        const rX = rotX(this.rot[0]);
-        const rY = rotY(this.rot[1]);
-        const rZ = rotZ(this.rot[2]);
-        const s = scale(this.scale);
-        const t = translate(this.pos[0], this.pos[1], this.pos[2]);
-        const modelMatrix = matMult(t, matMult(rZ, matMult(rY, matMult(rX, s))));
-        this.vertices = this.baseCloud.map(point => {
-            const transformed = matMult(modelMatrix, [[point[0]], [point[1]], [point[2]], [1]]);
-            return [transformed[0][0], transformed[1][0], transformed[2][0]];
-        });
-        // this.normals = this.triangles.map(tri => {
-        //     const a = this.vertices[tri[0]];
-        //     const b = this.vertices[tri[1]];
-        //     const c = this.vertices[tri[2]];
-        //     const edge1 = vSub(b, a);
-        //     const edge2 = vSub(c, a);
-        //     return normalize3(cross3(edge1, edge2));
-        // });
-        // this.faceNormals = this.normals;
-        this.currentCloud = this.vertices.map(p => [p[0], p[1], p[2]]);
     }
 }
 const predefinedShapesTwo = {
@@ -288,22 +249,15 @@ const predefinedShapesTwo = {
             v3(-1,0,-1),v3(-1,0,1),v3(1,0,1),v3(1,0,-1)
         ],
         faceIndex: [
-            [0,1,2,3]
+            [0,3,2,1]
         ]
     }
 }
-function toCameraSpaceVertices(obj, camera){
-    const viewMatrix = camera.getViewMatrix();
-    obj.cameraCloud = obj.vertices.map(p => {
-        const t = transformPoint(viewMatrix, p);
-        return [t[0], t[1], t[2]]
-    })
-}
 function isBackFaceCamera(obj, tri){
     const cam = obj.camera;
-    const ai = cam[tri[0]]*3;
-    const bi = cam[tri[1]]*3;
-    const ci = cam[tri[2]]*3;
+    const ai = [tri[0]]*3;
+    const bi = [tri[1]]*3;
+    const ci = [tri[2]]*3;
     const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
     const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
     const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
@@ -312,13 +266,13 @@ function isBackFaceCamera(obj, tri){
     const nx = aby * acz - abz * acy;
     const ny = abz * acx - abx * acz;
     const nz = abx * acy - aby * acx;
-    return (nx * ax + ny * ay + nz * az) >= 0;
+    return (nx * ax + ny * ay + nz * az) <= 0;
 }
 function triangleOutsideCameraView(obj, tri, camera){
     const cam = obj.camera;
-    const ai = cam[tri[0]]*3;
-    const bi = cam[tri[1]]*3;
-    const ci = cam[tri[2]]*3;
+    const ai = [tri[0]]*3;
+    const bi = [tri[1]]*3;
+    const ci = [tri[2]]*3;
     const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
     const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
     const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
@@ -377,14 +331,6 @@ function updateCameraAndScreenVertices(obj, camera){
         scr[(i/3)*2 + 1] = (1 - ndcY) * canvas.height / 2;
     }
 }
-function projectCameraVertices(obj, camera){
-    obj.projectedCloud = obj.cameraCloud.map(p => {
-        const z = p[2];
-        const ndcX = (p[0] * camera.f / camera.aspect)/ z;
-        const ndcY = (p[1] * camera.f) / z;
-        return [(ndcX + 1) * canvas.width / 2, (1 - ndcY) * canvas.height / 2];
-   });
-}
 const camToCanvas = (point) => {
     return [point[0] * canvas.width / 2 + canvas.width / 2, -point[1] * canvas.height / 2 + canvas.height / 2];
 }
@@ -426,9 +372,9 @@ function buildDrawingList(objs, camera){
         for (let triIndex = 0; triIndex < obj.triangles.length; triIndex++){
             const tri = obj.triangles[triIndex];
             if (isBackFaceCamera(obj, tri) || triangleOutsideCameraView(obj, tri, camera)) continue;
-            const ai = cam[tri[0]]*3;
-            const bi = cam[tri[1]]*3;
-            const ci = cam[tri[2]]*3;
+            const ai = [tri[0]]*3;
+            const bi = [tri[1]]*3;
+            const ci = [tri[2]]*3;
             const z = (cam[ai+2] + cam[bi+2] + cam[ci+2]) / 3;
             drawList.push({obj, tri, z});
         }
@@ -489,12 +435,21 @@ document.getElementById("canvas").addEventListener("click", (e) => {
 //event listener key
 document.addEventListener("keydown", (e) => {
     const step = 0.01;
+    const moveStep = 2.0;
     if (e.key === "w") cube.rot[2] -= step;
     if (e.key === "s") cube.rot[2] += step;
     if (e.key === "a") cube.rot[0] -= step;
     if (e.key === "d") cube.rot[0] += step;
     if (e.key === "q") cube.rot[1] -= step;
     if (e.key === "e") cube.rot[1] += step;
+    if (e.key === "ArrowUp") camera.pos[2] += moveStep;
+    if (e.key === "ArrowDown") camera.pos[2] -= moveStep;
+    if (e.key === "ArrowLeft") camera.pos[0] -= moveStep;
+    if (e.key === "ArrowRight") camera.pos[0] += moveStep;
+    if (e.key === "j") camera.rot[1] -= step;
+    if (e.key === "l") camera.rot[1] += step;
+    if (e.key === "i") camera.rot[2] -= step;
+    if (e.key === "k") camera.rot[2] += step;
 });
 
 const camera = new Camera();
@@ -502,7 +457,7 @@ const cube = new RigidBody();
 const pyramid = new RigidBody();
 const floor = new RigidBody()
 cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
-// enhanceMeshResolution(cube, 2);
+// enhanceMeshResolution(cube, 3);
 cube.pos = v(0,1,10);
 cube.rot = v(0.6,0.1,0.0);
 cube.scale = 2;
@@ -521,7 +476,11 @@ let objs = [cube, pyramid, floor];
 
 function animateDebug(){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+    objs.forEach(obj => {
+        updateWorldVertices(obj)
+        updateCameraAndScreenVertices(obj, camera)
+    }
+    );
     drawScene(objs, camera);
     pyramid.rot[1] += 0.01;
     requestAnimationFrame(animateDebug);
