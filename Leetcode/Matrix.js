@@ -300,21 +300,28 @@ function toCameraSpaceVertices(obj, camera){
     })
 }
 function isBackFaceCamera(obj, tri){
-    const a = obj.cameraCloud[tri[0]];
-    const b = obj.cameraCloud[tri[1]];
-    const c = obj.cameraCloud[tri[2]];
-    const ab = sub3(b,a)
-    const ac = sub3(c,a)
-    const n = cross3(ab, ac)
-    return n[2] < 0;
+    const cam = obj.camera;
+    const ai = cam[tri[0]]*3;
+    const bi = cam[tri[1]]*3;
+    const ci = cam[tri[2]]*3;
+    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
+    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
+    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
+    const abx = bx - ax, aby = by - ay, abz = bz - az;
+    const acx = cx - ax, acy = cy - ay, acz = cz - az;
+    const nx = aby * acz - abz * acy;
+    const ny = abz * acx - abx * acz;
+    const nz = abx * acy - aby * acx;
+    return (nx * ax + ny * ay + nz * az) >= 0;
 }
 function triangleOutsideCameraView(obj, tri, camera){
-    const a = obj.cameraCloud[tri[0]];
-    const b = obj.cameraCloud[tri[1]];
-    const c = obj.cameraCloud[tri[2]];
-    const ax = a[0], ay = a[1], az = a[2];
-    const bx = b[0], by = b[1], bz = b[2];
-    const cx = c[0], cy = c[1], cz = c[2];
+    const cam = obj.camera;
+    const ai = cam[tri[0]]*3;
+    const bi = cam[tri[1]]*3;
+    const ci = cam[tri[2]]*3;
+    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
+    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
+    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
     if (az < camera.near && bz < camera.near && cz < camera.near) return true;
     if (az > camera.far && bz > camera.far && cz > camera.far) return true;
     const axLimit = az * camera.aspect / camera.f;
@@ -413,14 +420,17 @@ function drawNormalAtHit(){
 }
 function buildDrawingList(objs, camera){
     const drawList = [];
-    for (let obj of objs){
-        for (let tri of obj.triangles){
-            if (triangleOutsideCameraView(obj, tri, camera)) continue;
-            if (isBackFaceCamera(obj, tri)) continue;
-            const a = obj.cameraCloud[tri[0]];
-            const b = obj.cameraCloud[tri[1]];
-            const c = obj.cameraCloud[tri[2]];
-            drawList.push({obj, tri, z: (a[2]+b[2]+c[2])/3});
+    for (let objIndex = 0; objIndex < objs.length; objIndex++){
+        const obj = objs[objIndex];
+        const cam = obj.camera;
+        for (let triIndex = 0; triIndex < obj.triangles.length; triIndex++){
+            const tri = obj.triangles[triIndex];
+            if (isBackFaceCamera(obj, tri) || triangleOutsideCameraView(obj, tri, camera)) continue;
+            const ai = cam[tri[0]]*3;
+            const bi = cam[tri[1]]*3;
+            const ci = cam[tri[2]]*3;
+            const z = (cam[ai+2] + cam[bi+2] + cam[ci+2]) / 3;
+            drawList.push({obj, tri, z});
         }
     }
     drawList.sort((a,b) => b.z - a.z);
@@ -456,7 +466,8 @@ function drawScene(objs, camera){
     const drawList = buildDrawingList(objs, camera);
 
     for (const item of drawList){
-        const color = colorInd[item.obj.triangles.indexOf(item.tri) % 11] || "#FFF";
+        const color = colorInd[ind % 11] || "#FFF";
+        ind++;
         drawTriangle(item.obj, item.tri, color);
     }
 }
@@ -510,14 +521,9 @@ let objs = [cube, pyramid, floor];
 
 function animateDebug(){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    objs.forEach(obj => {
-        obj.update();
-        toCameraSpaceVertices(obj, camera);
-        projectCameraVertices(obj, camera);
-    });
+
     drawScene(objs, camera);
     pyramid.rot[1] += 0.01;
-    
+    requestAnimationFrame(animateDebug);
 }
-
-setInterval(animateDebug, 20);
+animateDebug();
