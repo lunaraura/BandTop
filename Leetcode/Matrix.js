@@ -208,18 +208,27 @@ class RigidBody{
         this.pos = v(0,0,0);
         this.rot = v(0,0,0);
         this.scale = 1;
+        this.base = null
+        this.world = null;
+        this.camera = null
         this.baseCloud = []
         this.currentCloud = []
         this.normals = [];
     }
     buildMesh(vertices, faces){
-        this.baseCloud = vertices.map(p => [p[0], p[1], p[2]]);
-        this.currentCloud = this.baseCloud.map(p => [p[0], p[1], p[2]]);
-        this.triangles = [];
-        for (let f of faces) {
-            this.triangles.push(...triangulateFace(f));
+        const flat = []
+        for (const p of vertices){
+            flat.push(p[0],p[1],p[2])
         }
-        this.faceNormals = [];
+        this.base = new Float32Array(flat)
+        this.world = new Float32Array(flat.length)
+        this.camera = new Float32Array(flat.length)
+        this.screen = new Float32Array((flat.length/3)*2)
+        
+        this.triangles = []
+        for (const f of faces){
+            this.triangles.push(...triangulateFace(f))
+        }
     }
     update(){
         const rX = rotX(this.rot[0]);
@@ -321,6 +330,46 @@ function triangleOutsideCameraView(obj, tri, camera){
     if (ay > ayLimit && by > byLimit && cy > cyLimit) return true;
     return false;
 }
+function updateWorldVertices(obj){
+    const src = obj.base
+    const dst = obj.world
+    const sx = obj.scale;
+    const rx = obj.rot[0], ry = obj.rot[1], rz = obj.rot[2];
+    const cx = Math.cos(rx), sxr = Math.sin(rx);
+    const cy = Math.cos(ry), syr = Math.sin(ry);
+    const cz = Math.cos(rz), szr = Math.sin(rz);
+    for (let i = 0; i < src.length; i+=3){
+        let x = src[i] * sx;
+        let y = src[i+1] * sx;
+        let z = src[i+2] * sx;
+        let y1 = y * cx - z * sxr;
+        let z1 = y * sxr + z * cx;
+        let x2 = x * cy + z1 * syr;
+        let z2 = -x * syr + z1 * cy;
+        let x3 = x2 * cz - y1 * szr;
+        let y3 = x2 * szr + y1 * cz;
+        dst[i] = x3 + obj.pos[0];
+        dst[i+1] = y3 + obj.pos[1];
+        dst[i+2] = z2 + obj.pos[2];
+    }
+}
+function updateCameraAndScreenVertices(obj, camera){
+    const src = obj.world
+    const cam = obj.camera;
+    const scr = obj.screen;
+    for (let i = 0; i < src.length; i+=3){
+        const x = src[i] - camera.pos[0];
+        const y = src[i+1] - camera.pos[1];
+        const z = src[i+2] - camera.pos[2];
+        cam[i] = x;
+        cam[i+1] = y;
+        cam[i+2] = z;
+        const ndcX = (x * camera.f / camera.aspect) / z;
+        const ndcY = (y * camera.f) / z;
+        scr[(i/3)*2] = (ndcX + 1) * canvas.width / 2;
+        scr[(i/3)*2 + 1] = (1 - ndcY) * canvas.height / 2;
+    }
+}
 function projectCameraVertices(obj, camera){
     obj.projectedCloud = obj.cameraCloud.map(p => {
         const z = p[2];
@@ -377,6 +426,17 @@ function buildDrawingList(objs, camera){
     drawList.sort((a,b) => b.z - a.z);
     return drawList;
 }
+function drawTriangle(obj, tri, color){
+    const s = obj.screen;
+    const ai = tri[0] * 2, bi = tri[1] * 2, ci = tri[2] * 2;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(s[ai], s[ai+1]);
+    ctx.lineTo(s[bi], s[bi+1]);
+    ctx.lineTo(s[ci], s[ci+1]);
+    ctx.closePath();
+    ctx.fill();
+}
 function drawScene(objs, camera){
     let ind = 0
     ctx.beginPath();
@@ -396,19 +456,8 @@ function drawScene(objs, camera){
     const drawList = buildDrawingList(objs, camera);
 
     for (const item of drawList){
-        const {obj, tri, z} = item;
-        const a = obj.projectedCloud[tri[0]];
-        const b = obj.projectedCloud[tri[1]];
-        const c = obj.projectedCloud[tri[2]];
-        fillPolygon([a, b, c], colorInd[ind % 10]);
-        ind++;
-        ctx.strokeStyle = "black";
-        ctx.beginPath();
-        ctx.moveTo(a[0], a[1]);
-        ctx.lineTo(b[0], b[1]);
-        ctx.lineTo(c[0], c[1]);
-        ctx.closePath();
-        ctx.stroke();
+        const color = colorInd[item.obj.triangles.indexOf(item.tri) % 11] || "#FFF";
+        drawTriangle(item.obj, item.tri, color);
     }
 }
 document.getElementById("canvas").addEventListener("click", (e) => {
@@ -442,7 +491,7 @@ const cube = new RigidBody();
 const pyramid = new RigidBody();
 const floor = new RigidBody()
 cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
-enhanceMeshResolution(cube, 2);
+// enhanceMeshResolution(cube, 2);
 cube.pos = v(0,1,10);
 cube.rot = v(0.6,0.1,0.0);
 cube.scale = 2;
@@ -450,9 +499,9 @@ pyramid.buildMesh(predefinedShapesTwo.pyramid.vertices, predefinedShapesTwo.pyra
 pyramid.pos = v(2,0,5);
 pyramid.rot = v(0.6,0.1,0.0);
 pyramid.scale = 1;
-enhanceMeshResolution(pyramid, 2);
+// enhanceMeshResolution(pyramid, 2);
 floor.buildMesh(predefinedShapesTwo.planeFloor.vertices, predefinedShapesTwo.planeFloor.faceIndex);
-enhanceMeshResolution(floor, 10)
+// enhanceMeshResolution(floor, 10)
 floor.pos = v(0,-4,5)
 floor.rot = v(0,0,0)
 floor.scale = 6;
