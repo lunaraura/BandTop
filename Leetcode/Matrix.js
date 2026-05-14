@@ -70,32 +70,53 @@ function raycastFace(rayOrigin, dir, mesh){
     }
     return bestHit ? {point: bestHit, normal: bestN} : null;
 }
+const hardlimitResolution = 10;
 function enhanceMeshResolution(rigidBody, divideByN){
-    if (divideByN < 2 && divideByN > 6) return;
+    if (divideByN < 2 && divideByN > hardlimitResolution) return;
+    const oldVertices = rigidBody.baseCloud;
+    const oldTriangles = rigidBody.triangles;
+    const newVertices = [];
     const newTriangles = [];
-    const newCloud = [];
-    for(let tri of rigidBody.cloudTriangles){
-        const v0 = rigidBody.vertices[tri[0]];
-        const v1 = rigidBody.vertices[tri[1]];
-        const v2 = rigidBody.vertices[tri[2]];
-        const edge01 = mul3(sub3(v1, v0), 1/divideByN);
-        const edge12 = mul3(sub3(v2, v1), 1/divideByN);
-        const edge20 = mul3(sub3(v0, v2), 1/divideByN);
-        for(let i=0; i<divideByN; i++){
-            for(let j=0; j<divideByN - i; j++){
-                const a = add3(v0, mul3(edge01, i));
-                const b = add3(v0, mul3(edge01, i+1));
-                const c = add3(a, mul3(edge12, j));
-                const d = add3(b, mul3(edge12, j));
-                newTriangles.push([a, c, d]);
+    function addVertex(p){
+        newVertices.push([p[0], p[1], p[2]]);
+        return newVertices.length - 1;
+    }
+    for (let tri of oldTriangles){
+        const a = oldVertices[tri[0]];
+        const b = oldVertices[tri[1]];
+        const c = oldVertices[tri[2]];
+        const grid = [];
+        for (let i = 0; i <= divideByN; i++){
+            grid[i] = [];
+            for (let j = 0; j <= divideByN - i; j++){
+                const p = [
+                    a[0] + (b[0] - a[0]) * (i / divideByN) + (c[0] - a[0]) * (j / divideByN),
+                    a[1] + (b[1] - a[1]) * (i / divideByN) + (c[1] - a[1]) * (j / divideByN),
+                    a[2] + (b[2] - a[2]) * (i / divideByN) + (c[2] - a[2]) * (j / divideByN)
+                ];
+                grid[i][j] = addVertex(p);
+            }
+        }
+        for (let i = 0; i < divideByN; i++){
+            for (let j = 0; j < divideByN - i; j++){
+                newTriangles.push([grid[i][j], grid[i+1][j], grid[i][j+1]]);
                 if (j < divideByN - i - 1){
-                    const e = add3(c, mul3(edge20, 1));
-                    newTriangles.push([a, d, e]);
+                    newTriangles.push([grid[i+1][j], grid[i+1][j+1], grid[i][j+1]]);
                 }
             }
         }
     }
-    rigidBody.baseCloud = newTriangles;
+    rigidBody.baseCloud = newVertices;
+    rigidBody.currentCloud = newVertices.map(p => [p[0], p[1], p[2]]);
+    rigidBody.triangles = newTriangles;
+    rigidBody.faceNormals = newTriangles.map(tri => {
+        const a = rigidBody.baseCloud[tri[0]];
+        const b = rigidBody.baseCloud[tri[1]];
+        const c = rigidBody.baseCloud[tri[2]];
+        const edge1 = sub3(b, a);
+        const edge2 = sub3(c, a);
+        return normalize3(cross3(edge1, edge2));
+    });
 }
 
 function isBackFace(mesh, tri, camera){
@@ -239,7 +260,7 @@ const predefinedShapesTwo = {
 
         faceIndex: [
             [0,1,2,3], //bot
-            // [6,5,4,7], //top
+            [6,5,4,7], //top
             [0,4,5,1], //right
             [6,7,3,2], //left
             [6,2,1,5], // front
@@ -256,6 +277,14 @@ const predefinedShapesTwo = {
             [0,3,4], // back
             [0,4,1], // left
             [1,4,3,2] // bottom
+        ]
+    },
+    planeFloor: {
+        vertices: [
+            v3(-1,0,-1),v3(-1,0,1),v3(1,0,1),v3(1,0,-1)
+        ],
+        faceIndex: [
+            [0,1,2,3]
         ]
     }
 }
@@ -310,26 +339,31 @@ function getTrianglesSortedByDepth(mesh, camera){
     });
 }
 function draw(obj){
+    //instead of individual obj, cache all objects, sort triangles, and draw?
     const projectedPoints = obj.currentCloud.map(point => camera.project(point));
     const sortedTriangles = getTrianglesSortedByDepth(obj, camera);
     
     let ind = 0
     ctx.beginPath();
     let colorInd = {
-        0: "red",
-        1: "green",
-        2: "blue",
-        3: "yellow",
-        4: "cyan",
-        5: "magenta",
-        6: "white"
+        0: '#F00',
+        1: "#FA0",
+        2: "#FF0",
+        3: "#AF0",
+        4: "#0F0",
+        5: "#0FA",
+        6: "#0FF",
+        7: "#0AF",
+        8: "#00F",
+        9: "#A0F",
+        10: "#F0F"
     }
     for(let tri of sortedTriangles){
         if (isBackFace(obj, tri, camera)) continue; // backface culling
         const p1 = camToCanvas(projectedPoints[tri[0]]);
         const p2 = camToCanvas(projectedPoints[tri[1]]);
         const p3 = camToCanvas(projectedPoints[tri[2]]);
-        fillPolygon([p1, p2, p3], colorInd[ind % 6]);
+        fillPolygon([p1, p2, p3], colorInd[ind % 10]);
         ind++;
         ctx.strokeStyle = "black";
         ctx.beginPath();
@@ -369,18 +403,24 @@ document.addEventListener("keydown", (e) => {
 const camera = new Camera();
 const cube = new RigidBody();
 const pyramid = new RigidBody();
+const floor = new RigidBody()
 cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
-//resolution enhancement test
-const enhancedMesh = predefinedShapesTwo.cube.faceIndex.flatMap(face => triangulateFace(face)).map(tri => tri.map(i => predefinedShapesTwo.cube.vertices[i]));
-cube.triangles = enhancedMesh;
-cube.pos = v(0,0,5);
+enhanceMeshResolution(cube, 10);
+cube.pos = v(0,1,5);
 cube.rot = v(0.6,0.1,0.0);
-cube.scale = 3;
+cube.scale = 2;
 pyramid.buildMesh(predefinedShapesTwo.pyramid.vertices, predefinedShapesTwo.pyramid.faceIndex);
 pyramid.pos = v(2,0,5);
 pyramid.rot = v(0.6,0.1,0.0);
-pyramid.scale = 3;
-let objs = [cube, pyramid];
+pyramid.scale = 1;
+enhanceMeshResolution(pyramid, 2);
+floor.buildMesh(predefinedShapesTwo.planeFloor.vertices, predefinedShapesTwo.planeFloor.faceIndex);
+enhanceMeshResolution(floor, 10)
+floor.pos = v(0,-4,5)
+floor.rot = v(0,0,0)
+floor.scale = 6;
+let objs = [cube, pyramid, floor];
+
 
 function animateDebug(){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -388,7 +428,7 @@ function animateDebug(){
         obj.update();
         draw(obj);
     });
-    pyramid.rot[1] += 0.001;
+    pyramid.rot[1] += 0.01;
     requestAnimationFrame(animateDebug);
 }
 animateDebug();
