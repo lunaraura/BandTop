@@ -232,15 +232,15 @@ class RigidBody{
             const transformed = matMult(modelMatrix, [[point[0]], [point[1]], [point[2]], [1]]);
             return [transformed[0][0], transformed[1][0], transformed[2][0]];
         });
-        this.normals = this.triangles.map(tri => {
-            const a = this.vertices[tri[0]];
-            const b = this.vertices[tri[1]];
-            const c = this.vertices[tri[2]];
-            const edge1 = vSub(b, a);
-            const edge2 = vSub(c, a);
-            return normalize3(cross3(edge1, edge2));
-        });
-        this.faceNormals = this.normals;
+        // this.normals = this.triangles.map(tri => {
+        //     const a = this.vertices[tri[0]];
+        //     const b = this.vertices[tri[1]];
+        //     const c = this.vertices[tri[2]];
+        //     const edge1 = vSub(b, a);
+        //     const edge2 = vSub(c, a);
+        //     return normalize3(cross3(edge1, edge2));
+        // });
+        // this.faceNormals = this.normals;
         this.currentCloud = this.vertices.map(p => [p[0], p[1], p[2]]);
     }
 }
@@ -306,19 +306,26 @@ function triangleOutsideCameraView(obj, tri, camera){
     const ax = a[0], ay = a[1], az = a[2];
     const bx = b[0], by = b[1], bz = b[2];
     const cx = c[0], cy = c[1], cz = c[2];
-    console.log(camera)
-    const near = camera.near;
-    const far = camera.far;
-    if ((az < near && bz < near && cz < near) || (az > far && bz > far && cz > far)) return true;
-    if ((ax < -1 || ax > 1) && (bx < -1 || bx > 1) && (cx < -1 || cx > 1)) return true;
-    if ((ay < -1 || ay > 1) && (by < -1 || by > 1) && (cy < -1 || cy > 1)) return true;
+    if (az < camera.near && bz < camera.near && cz < camera.near) return true;
+    if (az > camera.far && bz > camera.far && cz > camera.far) return true;
+    const axLimit = az * camera.aspect / camera.f;
+    const bxLimit = bz * camera.aspect / camera.f;
+    const cxLimit = cz * camera.aspect / camera.f;
+    const ayLimit = az / camera.f;
+    const byLimit = bz / camera.f;
+    const cyLimit = cz / camera.f;
+
+    if (ax < -axLimit && bx < -bxLimit && cx < -cxLimit) return true;
+    if (ax > axLimit && bx > bxLimit && cx > cxLimit) return true;
+    if (ay < -ayLimit && by < -byLimit && cy < -cyLimit) return true;
+    if (ay > ayLimit && by > byLimit && cy > cyLimit) return true;
     return false;
 }
 function projectCameraVertices(obj, camera){
     obj.projectedCloud = obj.cameraCloud.map(p => {
         const z = p[2];
-        const ndcX = (p[0] * camera.f / camera.aspect)/ -z;
-        const ndcY = (p[1] * camera.f) / -z;
+        const ndcX = (p[0] * camera.f / camera.aspect)/ z;
+        const ndcY = (p[1] * camera.f) / z;
         return [(ndcX + 1) * canvas.width / 2, (1 - ndcY) * canvas.height / 2];
    });
 }
@@ -435,8 +442,8 @@ const cube = new RigidBody();
 const pyramid = new RigidBody();
 const floor = new RigidBody()
 cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
-enhanceMeshResolution(cube, 10);
-cube.pos = v(0,1,5);
+enhanceMeshResolution(cube, 2);
+cube.pos = v(0,1,10);
 cube.rot = v(0.6,0.1,0.0);
 cube.scale = 2;
 pyramid.buildMesh(predefinedShapesTwo.pyramid.vertices, predefinedShapesTwo.pyramid.faceIndex);
@@ -464,4 +471,4 @@ function animateDebug(){
     
 }
 
-setInterval(animateDebug, 100);
+setInterval(animateDebug, 20);
