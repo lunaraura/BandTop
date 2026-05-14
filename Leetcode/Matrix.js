@@ -494,3 +494,98 @@ function animateDebug(){
     requestAnimationFrame(animateDebug);
 }
 animateDebug();
+function isBackFaceCamera(obj, i0, i1, i2){
+    const cam = obj.camera;
+
+    const ai = i0 * 3;
+    const bi = i1 * 3;
+    const ci = i2 * 3;
+
+    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
+    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
+    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
+
+    const abx = bx - ax, aby = by - ay, abz = bz - az;
+    const acx = cx - ax, acy = cy - ay, acz = cz - az;
+
+    const nx = aby * acz - abz * acy;
+    const ny = abz * acx - abx * acz;
+    const nz = abx * acy - aby * acx;
+
+    return (nx * ax + ny * ay + nz * az) <= 0;
+}
+
+function triangleOutsideCameraView(obj, i0, i1, i2, camera){
+    const cam = obj.camera;
+
+    const ai = i0 * 3;
+    const bi = i1 * 3;
+    const ci = i2 * 3;
+
+    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
+    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
+    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
+
+    if (az < camera.near && bz < camera.near && cz < camera.near) return true;
+    if (az > camera.far && bz > camera.far && cz > camera.far) return true;
+
+    const axLimit = az * camera.aspect / camera.f;
+    const bxLimit = bz * camera.aspect / camera.f;
+    const cxLimit = cz * camera.aspect / camera.f;
+
+    const ayLimit = az / camera.f;
+    const byLimit = bz / camera.f;
+    const cyLimit = cz / camera.f;
+
+    if (ax < -axLimit && bx < -bxLimit && cx < -cxLimit) return true;
+    if (ax >  axLimit && bx >  bxLimit && cx >  cxLimit) return true;
+    if (ay < -ayLimit && by < -byLimit && cy < -cyLimit) return true;
+    if (ay >  ayLimit && by >  byLimit && cy >  cyLimit) return true;
+
+    return false;
+}
+
+function buildDrawingList(objs, camera){
+    const drawList = [];
+
+    for (let objIndex = 0; objIndex < objs.length; objIndex++){
+        const obj = objs[objIndex];
+        const cam = obj.camera;
+        const tris = obj.triangles;
+
+        for (let triIndex = 0; triIndex < tris.length; triIndex += 3){
+            const i0 = tris[triIndex];
+            const i1 = tris[triIndex + 1];
+            const i2 = tris[triIndex + 2];
+
+            if (triangleOutsideCameraView(obj, i0, i1, i2, camera)) continue;
+            if (isBackFaceCamera(obj, i0, i1, i2)) continue;
+
+            const z = (
+                cam[i0 * 3 + 2] +
+                cam[i1 * 3 + 2] +
+                cam[i2 * 3 + 2]
+            ) / 3;
+
+            drawList.push({ obj, i0, i1, i2, z });
+        }
+    }
+
+    drawList.sort((a, b) => b.z - a.z);
+    return drawList;
+}
+function drawTriangle(obj, i0, i1, i2, color){
+    const s = obj.screen;
+
+    const ai = i0 * 2;
+    const bi = i1 * 2;
+    const ci = i2 * 2;
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(s[ai], s[ai+1]);
+    ctx.lineTo(s[bi], s[bi+1]);
+    ctx.lineTo(s[ci], s[ci+1]);
+    ctx.closePath();
+    ctx.fill();
+}
