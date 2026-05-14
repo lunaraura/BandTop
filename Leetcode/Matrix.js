@@ -175,6 +175,11 @@ class Camera{
     constructor(){
         this.pos = v(0,0,-5);
         this.rot = v(0,0,0);
+        this.fov = 90;
+        this.aspect = canvas.width / canvas.height;
+        this.near = 0.1;
+        this.far = 100;
+        this.f = 1 / Math.tan(this.fov * 0.5 * Math.PI / 180);
     }
     getViewMatrix(){
         const rX = rotX(this.rot[0]);
@@ -184,19 +189,17 @@ class Camera{
         return matMult(rZ, matMult(rY, matMult(rX, t)));
     }
     project(point){
-        const fov = 90;
-        const aspect = canvas.width / canvas.height;
-        const near = 0.1;
-        const f = 1 / Math.tan(fov * 0.3 * Math.PI / 180);
         const projectionMatrix = [
-            [f/aspect, 0, 0, 0],
-            [0, f, 0, 0],
-            [0, 0, (100+near)/(near-100), (2*100*near)/(near-100)],
+            [this.f/this.aspect, 0, 0, 0],
+            [0, this.f, 0, 0],
+            [0, 0, (this.far+this.near)/(this.near-this.far), (2*this.far*this.near)/(this.near-this.far)],
             [0, 0, 1, 0]
         ];
         const viewMatrix = this.getViewMatrix();
         const transformed = matMult(projectionMatrix, matMult(viewMatrix, [[point[0]], [point[1]], [point[2]], [1]]));
-        return [transformed[0][0] / transformed[3][0], transformed[1][0] / transformed[3][0]];
+        const ndcX = transformed[0][0] / transformed[3][0];
+        const ndcY = transformed[1][0] / transformed[3][0];
+        return [(ndcX + 1) * canvas.width / 2, (1 - ndcY) * canvas.height / 2];
     }
 }
 
@@ -296,11 +299,28 @@ function isBackFaceCamera(obj, tri){
     const n = cross3(ab, ac)
     return n[2] < 0;
 }
-function triangleOutsideCameraView(obj, tri){
+function triangleOutsideCameraView(obj, tri, camera){
     const a = obj.cameraCloud[tri[0]];
     const b = obj.cameraCloud[tri[1]];
     const c = obj.cameraCloud[tri[2]];
-    return a[2] < 0 && b[2] < 0 && c[2] < 0;
+    const ax = a[0], ay = a[1], az = a[2];
+    const bx = b[0], by = b[1], bz = b[2];
+    const cx = c[0], cy = c[1], cz = c[2];
+    console.log(camera)
+    const near = camera.near;
+    const far = camera.far;
+    if ((az < near && bz < near && cz < near) || (az > far && bz > far && cz > far)) return true;
+    if ((ax < -1 || ax > 1) && (bx < -1 || bx > 1) && (cx < -1 || cx > 1)) return true;
+    if ((ay < -1 || ay > 1) && (by < -1 || by > 1) && (cy < -1 || cy > 1)) return true;
+    return false;
+}
+function projectCameraVertices(obj, camera){
+    obj.projectedCloud = obj.cameraCloud.map(p => {
+        const z = p[2];
+        const ndcX = (p[0] * camera.f / camera.aspect)/ -z;
+        const ndcY = (p[1] * camera.f) / -z;
+        return [(ndcX + 1) * canvas.width / 2, (1 - ndcY) * canvas.height / 2];
+   });
 }
 const camToCanvas = (point) => {
     return [point[0] * canvas.width / 2 + canvas.width / 2, -point[1] * canvas.height / 2 + canvas.height / 2];
@@ -338,13 +358,12 @@ function drawNormalAtHit(){
 function buildDrawingList(objs, camera){
     const drawList = [];
     for (let obj of objs){
-        obj.projectedCloud = obj.currentCloud.map(point => camera.project(point));
         for (let tri of obj.triangles){
-            if (triangleOutsideCameraView(obj, tri)) continue;
+            if (triangleOutsideCameraView(obj, tri, camera)) continue;
             if (isBackFaceCamera(obj, tri)) continue;
-            const a = obj.projectedCloud[tri[0]];
-            const b = obj.projectedCloud[tri[1]];
-            const c = obj.projectedCloud[tri[2]];
+            const a = obj.cameraCloud[tri[0]];
+            const b = obj.cameraCloud[tri[1]];
+            const c = obj.cameraCloud[tri[2]];
             drawList.push({obj, tri, z: (a[2]+b[2]+c[2])/3});
         }
     }
@@ -438,9 +457,11 @@ function animateDebug(){
     objs.forEach(obj => {
         obj.update();
         toCameraSpaceVertices(obj, camera);
+        projectCameraVertices(obj, camera);
     });
     drawScene(objs, camera);
     pyramid.rot[1] += 0.01;
-    requestAnimationFrame(animateDebug);
+    
 }
-animateDebug();
+
+setInterval(animateDebug, 100);
