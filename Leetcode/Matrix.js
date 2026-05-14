@@ -1,280 +1,434 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-const W = () => canvas.width;
-const H = () => canvas.height;
-
-function makeCubeMesh() {
-    const verts = new Float32Array([
-        -1,-1,-1,  1,-1,-1,  1, 1,-1, -1, 1,-1,
-        -1,-1, 1,  1,-1, 1,  1, 1, 1, -1, 1, 1
-    ]);
-
-    // Indexed triangles. Winding must be consistent.
-    const indices = new Uint32Array([
-        0,2,1, 0,3,2, // back
-        4,5,6, 4,6,7, // front
-        0,1,5, 0,5,4, // bottom
-        3,7,6, 3,6,2, // top
-        1,2,6, 1,6,5, // right
-        0,4,7, 0,7,3  // left
-    ]);
-
-    return new Mesh(verts, indices);
+const v = (x,y,z) => [x,y,z,0];
+const v3 = (x,y,z) => [x,y,z];
+const add3 = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+const sub3 = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const mul3 = (v, s) => [v[0]*s, v[1]*s, v[2]*s];
+const cross3 = (a,b) => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+];
+const length3 = (v) => Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+const normalize3 = (v) => {
+    const len = length3(v);
+    return len > 0 ? [v[0]/len, v[1]/len, v[2]/len] : [0,0,0];
 }
-
-class Mesh {
-    constructor(vertices, indices) {
-        this.local = vertices;
-        this.indices = indices;
-        this.world = new Float32Array(vertices.length);
-        this.camera = new Float32Array(vertices.length);
-        this.screen = new Float32Array((vertices.length / 3) * 2);
+const dot3 = (a,b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+function transformPoint(matrix, point){
+    const transformed = matMult(matrix, [[point[0]], [point[1]], [point[2]], [1]]);
+    return [transformed[0][0], transformed[1][0], transformed[2][0], transformed[3][0]];
+}
+function triangulateFace(face){
+    const triangles = [];
+    if (!face || face.length < 3) return triangles;
+    for (let i = 1; i < face.length - 1; i++) {
+        triangles.push([face[0], face[i], face[i + 1]]);
     }
+    return triangles;
 }
-
-class Object3D {
-    constructor(mesh) {
-        this.mesh = mesh;
-        this.x = 0;
-        this.y = 0;
-        this.z = 0;
-        this.rx = 0;
-        this.ry = 0;
-        this.rz = 0;
-        this.s = 1;
-    }
+function pointInTriangle(pt, v1, v2, v3){
+    const v0 = sub3(v3, v1);
+    const v1v = sub3(v2, v1);
+    const v2v = sub3(pt, v1);
+    const dot00 = dot3(v0, v0);
+    const dot01 = dot3(v0, v1v);
+    const dot02 = dot3(v0, v2v);
+    const dot11 = dot3(v1v, v1v);
+    const dot12 = dot3(v1v, v2v);
+    const denom = dot00 * dot11 - dot01 * dot01;
+    if (Math.abs(denom) < 1e-8) return false;
+    const invDenom = 1 / denom;
+    const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+    const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+    return u >= 0 && v >= 0 && u + v <= 1;
 }
-
-class Camera {
-    constructor() {
-        this.x = 0;
-        this.y = 0;
-        this.z = -5;
-        this.rx = 0;
-        this.ry = 0;
-        this.rz = 0;
-        this.fov = Math.PI / 2;
-        this.near = 0.1;
-        this.far = 100;
-    }
-
-    focal() {
-        return 1 / Math.tan(this.fov * 0.5);
-    }
-}
-
-const camera = new Camera();
-const cube = new Object3D(makeCubeMesh());
-cube.z = 5;
-cube.s = 2;
-
-const objects = [cube];
-const drawList = [];
-
-function rotateXYZ(x, y, z, rx, ry, rz) {
-    let cx = Math.cos(rx), sx = Math.sin(rx);
-    let cy = Math.cos(ry), sy = Math.sin(ry);
-    let cz = Math.cos(rz), sz = Math.sin(rz);
-
-    let y1 = y * cx - z * sx;
-    let z1 = y * sx + z * cx;
-    let x1 = x;
-
-    let x2 = x1 * cy + z1 * sy;
-    let z2 = -x1 * sy + z1 * cy;
-    let y2 = y1;
-
-    let x3 = x2 * cz - y2 * sz;
-    let y3 = x2 * sz + y2 * cz;
-
-    return [x3, y3, z2];
-}
-
-function transformObjectToWorld(obj) {
-    const m = obj.mesh;
-    const src = m.local;
-    const dst = m.world;
-
-    for (let i = 0; i < src.length; i += 3) {
-        let x = src[i] * obj.s;
-        let y = src[i + 1] * obj.s;
-        let z = src[i + 2] * obj.s;
-
-        const r = rotateXYZ(x, y, z, obj.rx, obj.ry, obj.rz);
-
-        dst[i] = r[0] + obj.x;
-        dst[i + 1] = r[1] + obj.y;
-        dst[i + 2] = r[2] + obj.z;
-    }
-}
-
-function transformWorldToCamera(obj, cam) {
-    const m = obj.mesh;
-    const src = m.world;
-    const dst = m.camera;
-
-    for (let i = 0; i < src.length; i += 3) {
-        let x = src[i] - cam.x;
-        let y = src[i + 1] - cam.y;
-        let z = src[i + 2] - cam.z;
-
-        const r = rotateXYZ(x, y, z, -cam.rx, -cam.ry, -cam.rz);
-
-        dst[i] = r[0];
-        dst[i + 1] = r[1];
-        dst[i + 2] = r[2];
-    }
-}
-
-function projectVertices(obj, cam) {
-    const m = obj.mesh;
-    const src = m.camera;
-    const dst = m.screen;
-
-    const f = cam.focal();
-    const aspect = W() / H();
-
-    for (let i = 0, j = 0; i < src.length; i += 3, j += 2) {
-        const x = src[i];
-        const y = src[i + 1];
-        const z = src[i + 2];
-
-        const ndcX = (x * f / aspect) / z;
-        const ndcY = (y * f) / z;
-
-        dst[j] = (ndcX + 1) * 0.5 * W();
-        dst[j + 1] = (1 - ndcY) * 0.5 * H();
-    }
-}
-
-function triangleOutsideFrustum(cam, ax, ay, az, bx, by, bz, cx, cy, cz) {
-    const f = cam.focal();
-    const aspect = W() / H();
-
-    if (az < cam.near && bz < cam.near && cz < cam.near) return true;
-    if (az > cam.far && bz > cam.far && cz > cam.far) return true;
-
-    const axLimit = az * aspect / f;
-    const bxLimit = bz * aspect / f;
-    const cxLimit = cz * aspect / f;
-
-    const ayLimit = az / f;
-    const byLimit = bz / f;
-    const cyLimit = cz / f;
-
-    if (ax < -axLimit && bx < -bxLimit && cx < -cxLimit) return true;
-    if (ax >  axLimit && bx >  bxLimit && cx >  cxLimit) return true;
-
-    if (ay < -ayLimit && by < -byLimit && cy < -cyLimit) return true;
-    if (ay >  ayLimit && by >  byLimit && cy >  cyLimit) return true;
-
-    return false;
-}
-
-function isBackFaceCamera(ax, ay, az, bx, by, bz, cx, cy, cz) {
-    const abx = bx - ax;
-    const aby = by - ay;
-    const abz = bz - az;
-
-    const acx = cx - ax;
-    const acy = cy - ay;
-    const acz = cz - az;
-
-    const nx = aby * acz - abz * acy;
-    const ny = abz * acx - abx * acz;
-    const nz = abx * acy - aby * acx;
-
-    // Camera looks down +Z in this file.
-    return nz < 0;
-}
-
-function buildDrawList() {
-    drawList.length = 0;
-
-    for (const obj of objects) {
-        const m = obj.mesh;
-        const camVerts = m.camera;
-        const idx = m.indices;
-
-        for (let i = 0; i < idx.length; i += 3) {
-            const ia = idx[i] * 3;
-            const ib = idx[i + 1] * 3;
-            const ic = idx[i + 2] * 3;
-
-            const ax = camVerts[ia],     ay = camVerts[ia + 1],     az = camVerts[ia + 2];
-            const bx = camVerts[ib],     by = camVerts[ib + 1],     bz = camVerts[ib + 2];
-            const cx = camVerts[ic],     cy = camVerts[ic + 1],     cz = camVerts[ic + 2];
-
-            if (triangleOutsideFrustum(camera, ax, ay, az, bx, by, bz, cx, cy, cz)) continue;
-            if (isBackFaceCamera(ax, ay, az, bx, by, bz, cx, cy, cz)) continue;
-
-            drawList.push({
-                obj,
-                tri: i,
-                z: (az + bz + cz) / 3
-            });
+function raycastFace(rayOrigin, dir, mesh){
+    let bestT = Infinity;
+    let bestN = null;
+    let bestHit = null;
+    for(let fi = 0; fi < mesh.triangles.length; fi++){
+        const [i0, i1, i2] = mesh.triangles[fi];
+        const v0 = mesh.vertices[i0];
+        const v1 = mesh.vertices[i1];
+        const v2 = mesh.vertices[i2];
+        const n = mesh.faceNormals[fi];
+        const denom = n[0] * dir[0] + n[1] * dir[1] + n[2] * dir[2];
+        if (Math.abs(denom) > 0.0001){
+            const t = (n[0] * (v0[0] - rayOrigin[0]) + n[1] * (v0[1] - rayOrigin[1]) + n[2] * (v0[2] - rayOrigin[2])) / denom;
+            if (t > 0 && t < bestT){
+                const hitPoint = add3(rayOrigin, mul3(dir, t));
+                if (pointInTriangle(hitPoint, v0, v1, v2)){
+                    bestT = t;
+                    bestN = n;
+                    bestHit = hitPoint;
+                }
+            }
         }
     }
-
-    drawList.sort((a, b) => b.z - a.z);
+    return bestHit ? {point: bestHit, normal: bestN} : null;
+}
+const hardlimitResolution = 10;
+function enhanceMeshResolution(rigidBody, divideByN){
+    if (divideByN < 2 && divideByN > hardlimitResolution) return;
+    const oldVertices = rigidBody.baseCloud;
+    const oldTriangles = rigidBody.triangles;
+    const newVertices = [];
+    const newTriangles = [];
+    function addVertex(p){
+        newVertices.push([p[0], p[1], p[2]]);
+        return newVertices.length - 1;
+    }
+    for (let tri of oldTriangles){
+        const a = oldVertices[tri[0]];
+        const b = oldVertices[tri[1]];
+        const c = oldVertices[tri[2]];
+        const grid = [];
+        for (let i = 0; i <= divideByN; i++){
+            grid[i] = [];
+            for (let j = 0; j <= divideByN - i; j++){
+                const p = [
+                    a[0] + (b[0] - a[0]) * (i / divideByN) + (c[0] - a[0]) * (j / divideByN),
+                    a[1] + (b[1] - a[1]) * (i / divideByN) + (c[1] - a[1]) * (j / divideByN),
+                    a[2] + (b[2] - a[2]) * (i / divideByN) + (c[2] - a[2]) * (j / divideByN)
+                ];
+                grid[i][j] = addVertex(p);
+            }
+        }
+        for (let i = 0; i < divideByN; i++){
+            for (let j = 0; j < divideByN - i; j++){
+                newTriangles.push([grid[i][j], grid[i+1][j], grid[i][j+1]]);
+                if (j < divideByN - i - 1){
+                    newTriangles.push([grid[i+1][j], grid[i+1][j+1], grid[i][j+1]]);
+                }
+            }
+        }
+    }
+    rigidBody.baseCloud = newVertices;
+    rigidBody.currentCloud = newVertices.map(p => [p[0], p[1], p[2]]);
+    rigidBody.triangles = newTriangles;
+    rigidBody.faceNormals = newTriangles.map(tri => {
+        const a = rigidBody.baseCloud[tri[0]];
+        const b = rigidBody.baseCloud[tri[1]];
+        const c = rigidBody.baseCloud[tri[2]];
+        const edge1 = sub3(b, a);
+        const edge2 = sub3(c, a);
+        return normalize3(cross3(edge1, edge2));
+    });
 }
 
-function drawTriangle(item) {
-    const m = item.obj.mesh;
-    const idx = m.indices;
-    const scr = m.screen;
+function isBackFace(mesh, tri, camera){
+    const viewMatrix = camera.getViewMatrix();
+    const a = transformPoint(viewMatrix, mesh.vertices[tri[0]]);
+    const b = transformPoint(viewMatrix, mesh.vertices[tri[1]]);
+    const c = transformPoint(viewMatrix, mesh.vertices[tri[2]]);
+    const n = normalize3(cross3(sub3(b, a), sub3(c, a)));
+    return n[2] < 0; // backface if normal points away from camera
+}
+const vAdd = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2], 0];
+const vSub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2], 0];
+const vMul = (v, s) => [v[0]*s, v[1]*s, v[2]*s, 0];
+const matMult = (a,b) => {
+    // general matrix multiplication: a (m x n) * b (n x p) => res (m x p)
+    const m = a.length;
+    const n = a[0].length;
+    const p = b[0].length;
+    const res = new Array(m);
+    for (let i = 0; i < m; i++) {
+        res[i] = new Array(p).fill(0);
+        for (let j = 0; j < p; j++) {
+            let sum = 0;
+            for (let k = 0; k < n; k++) {
+                sum += a[i][k] * b[k][j];
+            }
+            res[i][j] = sum;
+        }
+    }
+    return res;
+}
+const rotX = (x) =>{return [
+    [1, 0, 0, 0],
+    [0, Math.cos(x), -Math.sin(x), 0],
+    [0, Math.sin(x), Math.cos(x), 0],
+    [0, 0, 0, 1]
+];}
+const rotY = (y) =>{return [
+    [Math.cos(y), 0, Math.sin(y), 0],
+    [0, 1, 0, 0],
+    [-Math.sin(y), 0, Math.cos(y), 0],
+    [0, 0, 0, 1]
+];}
+const rotZ = (z) =>{return [
+    [Math.cos(z), -Math.sin(z), 0, 0],
+    [Math.sin(z), Math.cos(z), 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+];}
+const scale = (s) =>{return [
+    [s, 0, 0, 0],
+    [0, s, 0, 0],
+    [0, 0, s, 0],
+    [0, 0, 0, 1]
+];}
+const translate = (x,y,z) =>{return [
+    [1, 0, 0, x],
+    [0, 1, 0, y],
+    [0, 0, 1, z],
+    [0, 0, 0, 1]
+];}
 
-    const i = item.tri;
+class Camera{
+    constructor(){
+        this.pos = v(0,0,-5);
+        this.rot = v(0,0,0);
+    }
+    getViewMatrix(){
+        const rX = rotX(this.rot[0]);
+        const rY = rotY(this.rot[1]);
+        const rZ = rotZ(this.rot[2]);
+        const t = translate(-this.pos[0], -this.pos[1], -this.pos[2]);
+        return matMult(rZ, matMult(rY, matMult(rX, t)));
+    }
+    project(point){
+        const fov = 90;
+        const aspect = canvas.width / canvas.height;
+        const near = 0.1;
+        const f = 1 / Math.tan(fov * 0.3 * Math.PI / 180);
+        const projectionMatrix = [
+            [f/aspect, 0, 0, 0],
+            [0, f, 0, 0],
+            [0, 0, (100+near)/(near-100), (2*100*near)/(near-100)],
+            [0, 0, 1, 0]
+        ];
+        const viewMatrix = this.getViewMatrix();
+        const transformed = matMult(projectionMatrix, matMult(viewMatrix, [[point[0]], [point[1]], [point[2]], [1]]));
+        return [transformed[0][0] / transformed[3][0], transformed[1][0] / transformed[3][0]];
+    }
+}
 
-    const a = idx[i] * 2;
-    const b = idx[i + 1] * 2;
-    const c = idx[i + 2] * 2;
+class RigidBody{
+    constructor(){
+        this.pos = v(0,0,0);
+        this.rot = v(0,0,0);
+        this.scale = 1;
+        this.baseCloud = []
+        this.currentCloud = []
+        this.normals = [];
+    }
+    buildMesh(vertices, faces){
+        this.baseCloud = vertices.map(p => [p[0], p[1], p[2]]);
+        this.currentCloud = this.baseCloud.map(p => [p[0], p[1], p[2]]);
+        this.triangles = [];
+        for (let f of faces) {
+            this.triangles.push(...triangulateFace(f));
+        }
+        this.faceNormals = [];
+    }
+    update(){
+        const rX = rotX(this.rot[0]);
+        const rY = rotY(this.rot[1]);
+        const rZ = rotZ(this.rot[2]);
+        const s = scale(this.scale);
+        const t = translate(this.pos[0], this.pos[1], this.pos[2]);
+        const modelMatrix = matMult(t, matMult(rZ, matMult(rY, matMult(rX, s))));
+        this.vertices = this.baseCloud.map(point => {
+            const transformed = matMult(modelMatrix, [[point[0]], [point[1]], [point[2]], [1]]);
+            return [transformed[0][0], transformed[1][0], transformed[2][0]];
+        });
+        this.normals = this.triangles.map(tri => {
+            const a = this.vertices[tri[0]];
+            const b = this.vertices[tri[1]];
+            const c = this.vertices[tri[2]];
+            const edge1 = vSub(b, a);
+            const edge2 = vSub(c, a);
+            return normalize3(cross3(edge1, edge2));
+        });
+        this.faceNormals = this.normals;
+        this.currentCloud = this.vertices.map(p => [p[0], p[1], p[2]]);
+    }
+}
+const predefinedShapesTwo = {
+    cube: {
+        vertices: [
+            v3(-1,-1,-1), v3(1,-1,-1), v3(1,1,-1), v3(-1,1,-1),
+            v3(-1,-1,1), v3(1,-1,1), v3(1,1,1), v3(-1,1,1)
+        ],
+        // bt // -1-1 rbk 1-1 rfr 11 lfr 1-1 lbk
+        // tp // -1-1 rbk 1-1 rfr 11 lfr 1-1 lbk
 
+        faceIndex: [
+            [0,1,2,3], //bot
+            [6,5,4,7], //top
+            [0,4,5,1], //right
+            [6,7,3,2], //left
+            [6,2,1,5], // front
+            [0,3,7,4] // back
+        ]
+    },
+    pyramid: {
+        vertices: [
+            v3(0,1,0), v3(-1,-1,-1), v3(1,-1,-1), v3(1,-1,1), v3(-1,-1,1)
+        ],
+        faceIndex: [
+            [0,1,2], // front
+            [0,2,3], // right
+            [0,3,4], // back
+            [0,4,1], // left
+            [1,4,3,2] // bottom
+        ]
+    },
+    planeFloor: {
+        vertices: [
+            v3(-1,0,-1),v3(-1,0,1),v3(1,0,1),v3(1,0,-1)
+        ],
+        faceIndex: [
+            [0,1,2,3]
+        ]
+    }
+}
+
+const camToCanvas = (point) => {
+    return [point[0] * canvas.width / 2 + canvas.width / 2, -point[1] * canvas.height / 2 + canvas.height / 2];
+}
+const fillPolygon = (points, color) => {
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.moveTo(scr[a], scr[a + 1]);
-    ctx.lineTo(scr[b], scr[b + 1]);
-    ctx.lineTo(scr[c], scr[c + 1]);
+    ctx.moveTo(points[0][0], points[0][1]);
+    for(let i=1; i<points.length; i++){
+        ctx.lineTo(points[i][0], points[i][1]);
+    }
     ctx.closePath();
-
-    ctx.fillStyle = "rgba(200,200,200,0.8)";
     ctx.fill();
-
-    ctx.strokeStyle = "black";
-    ctx.stroke();
 }
 
-function render() {
-    ctx.clearRect(0, 0, W(), H());
-
-    for (const obj of objects) {
-        transformObjectToWorld(obj);
-        transformWorldToCamera(obj, camera);
-        projectVertices(obj, camera);
-    }
-
-    buildDrawList();
-
-    for (const item of drawList) {
-        drawTriangle(item);
+function raycastNormal(point){
+    const dir = normalize3(sub3(point, camera.pos));
+    const hit = raycastFace([camera.pos[0], camera.pos[1], camera.pos[2]], dir, cube);
+    return hit ? hit.normal : null;
+}
+function drawNormalAtHit(){
+    const origin = [camera.pos[0], camera.pos[1], camera.pos[2]];
+    const normal = raycastNormal(cube.pos);
+    if (normal) {
+        const endPoint = vAdd(origin, vMul(normal, 0.5));
+        const p1 = camToCanvas(camera.project(origin));
+        const p2 = camToCanvas(camera.project(endPoint));
+        ctx.beginPath();
+        ctx.moveTo(p1[0], p1[1]);
+        ctx.lineTo(p2[0], p2[1]);
+        ctx.strokeStyle = "blue";
+        ctx.stroke();
     }
 }
-
-document.addEventListener("keydown", e => {
-    const step = 0.05;
-
-    if (e.key === "a") cube.ry -= step;
-    if (e.key === "d") cube.ry += step;
-    if (e.key === "w") cube.rx -= step;
-    if (e.key === "s") cube.rx += step;
-    if (e.key === "q") cube.rz -= step;
-    if (e.key === "e") cube.rz += step;
+function sortFacesByDepth(mesh, camera){
+    const viewMatrix = camera.getViewMatrix();
+    mesh.triangles.sort((triA, triB) => {
+        const aZ = (transformPoint(viewMatrix, mesh.vertices[triA[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[2]])[2]) / 3;
+        const bZ = (transformPoint(viewMatrix, mesh.vertices[triB[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[2]])[2]) / 3;
+        return bZ - aZ; // sort back to front
+    });
+}
+function getTrianglesSortedByDepth(mesh, camera){
+    const viewMatrix = camera.getViewMatrix();
+    return [...mesh.triangles].sort((triA, triB) => {
+        const aZ = (transformPoint(viewMatrix, mesh.vertices[triA[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[2]])[2]) / 3;
+        const bZ = (transformPoint(viewMatrix, mesh.vertices[triB[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[2]])[2]) / 3;
+        return bZ - aZ; // sort back to front
+    });
+}
+function draw(obj){
+    //instead of individual obj, cache all objects, sort triangles, and draw?
+    const projectedPoints = obj.currentCloud.map(point => camera.project(point));
+    const sortedTriangles = getTrianglesSortedByDepth(obj, camera);
+    
+    let ind = 0
+    ctx.beginPath();
+    let colorInd = {
+        0: '#F00',
+        1: "#FA0",
+        2: "#FF0",
+        3: "#AF0",
+        4: "#0F0",
+        5: "#0FA",
+        6: "#0FF",
+        7: "#0AF",
+        8: "#00F",
+        9: "#A0F",
+        10: "#F0F"
+    }
+    for(let tri of sortedTriangles){
+        if (isBackFace(obj, tri, camera)) continue; // backface culling
+        const p1 = camToCanvas(projectedPoints[tri[0]]);
+        const p2 = camToCanvas(projectedPoints[tri[1]]);
+        const p3 = camToCanvas(projectedPoints[tri[2]]);
+        fillPolygon([p1, p2, p3], colorInd[ind % 10]);
+        ind++;
+        ctx.strokeStyle = "black";
+        ctx.beginPath();
+        ctx.moveTo(p1[0], p1[1]);
+        ctx.lineTo(p2[0], p2[1]);
+        ctx.lineTo(p3[0], p3[1]);
+        ctx.closePath();
+        ctx.stroke();
+    }
+}
+document.getElementById("canvas").addEventListener("click", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const rayTarget = [
+        (mouseX / canvas.width) * 2 - 1,
+        -(mouseY / canvas.height) * 2 + 1,
+        1
+    ];
+    const rayDir = normalize3( rayTarget);
+    const hit = raycastFace(camera.pos, rayDir, cube);
+    if (hit) {
+        console.log("Hit at:", hit.point, "Normal:", hit.normal);
+    }
+});
+//event listener key
+document.addEventListener("keydown", (e) => {
+    const step = 0.01;
+    if (e.key === "w") cube.rot[2] -= step;
+    if (e.key === "s") cube.rot[2] += step;
+    if (e.key === "a") cube.rot[0] -= step;
+    if (e.key === "d") cube.rot[0] += step;
+    if (e.key === "q") cube.rot[1] -= step;
+    if (e.key === "e") cube.rot[1] += step;
 });
 
-function animate() {
-    cube.ry += 0.01;
-    render();
-    requestAnimationFrame(animate);
-}
+const camera = new Camera();
+const cube = new RigidBody();
+const pyramid = new RigidBody();
+const floor = new RigidBody()
+cube.buildMesh(predefinedShapesTwo.cube.vertices, predefinedShapesTwo.cube.faceIndex);
+enhanceMeshResolution(cube, 10);
+cube.pos = v(0,1,5);
+cube.rot = v(0.6,0.1,0.0);
+cube.scale = 2;
+pyramid.buildMesh(predefinedShapesTwo.pyramid.vertices, predefinedShapesTwo.pyramid.faceIndex);
+pyramid.pos = v(2,0,5);
+pyramid.rot = v(0.6,0.1,0.0);
+pyramid.scale = 1;
+enhanceMeshResolution(pyramid, 2);
+floor.buildMesh(predefinedShapesTwo.planeFloor.vertices, predefinedShapesTwo.planeFloor.faceIndex);
+enhanceMeshResolution(floor, 10)
+floor.pos = v(0,-4,5)
+floor.rot = v(0,0,0)
+floor.scale = 6;
+let objs = [cube, pyramid, floor];
 
-animate();
+
+function animateDebug(){
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    objs.forEach(obj => {
+        obj.update();
+        draw(obj);
+    });
+    pyramid.rot[1] += 0.01;
+    requestAnimationFrame(animateDebug);
+}
+animateDebug();
