@@ -72,7 +72,7 @@ function raycastFace(rayOrigin, dir, mesh){
 }
 const hardlimitResolution = 10;
 function enhanceMeshResolution(rigidBody, divideByN){
-    if (divideByN < 2 && divideByN > hardlimitResolution) return;
+    if (divideByN < 2 || divideByN > hardlimitResolution) return;
     const oldVertices = rigidBody.baseCloud;
     const oldTriangles = rigidBody.triangles;
     const newVertices = [];
@@ -119,14 +119,6 @@ function enhanceMeshResolution(rigidBody, divideByN){
     });
 }
 
-function isBackFace(mesh, tri, camera){
-    const viewMatrix = camera.getViewMatrix();
-    const a = transformPoint(viewMatrix, mesh.vertices[tri[0]]);
-    const b = transformPoint(viewMatrix, mesh.vertices[tri[1]]);
-    const c = transformPoint(viewMatrix, mesh.vertices[tri[2]]);
-    const n = normalize3(cross3(sub3(b, a), sub3(c, a)));
-    return n[2] < 0; // backface if normal points away from camera
-}
 const vAdd = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2], 0];
 const vSub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2], 0];
 const vMul = (v, s) => [v[0]*s, v[1]*s, v[2]*s, 0];
@@ -288,7 +280,28 @@ const predefinedShapesTwo = {
         ]
     }
 }
-
+function toCameraSpaceVertices(obj, camera){
+    const viewMatrix = camera.getViewMatrix();
+    obj.cameraCloud = obj.vertices.map(p => {
+        const t = transformPoint(viewMatrix, p);
+        return [t[0], t[1], t[2]]
+    })
+}
+function isBackFaceCamera(obj, tri){
+    const a = obj.cameraCloud[tri[0]];
+    const b = obj.cameraCloud[tri[1]];
+    const c = obj.cameraCloud[tri[2]];
+    const ab = sub3(b,a)
+    const ac = sub3(c,a)
+    const n = cross3(ab, ac)
+    return n[2] < 0;
+}
+function triangleOutsideCameraView(obj, tri){
+    const a = obj.cameraCloud[tri[0]];
+    const b = obj.cameraCloud[tri[1]];
+    const c = obj.cameraCloud[tri[2]];
+    return a[2] < 0 && b[2] < 0 && c[2] < 0;
+}
 const camToCanvas = (point) => {
     return [point[0] * canvas.width / 2 + canvas.width / 2, -point[1] * canvas.height / 2 + canvas.height / 2];
 }
@@ -322,27 +335,23 @@ function drawNormalAtHit(){
         ctx.stroke();
     }
 }
-function sortFacesByDepth(mesh, camera){
-    const viewMatrix = camera.getViewMatrix();
-    mesh.triangles.sort((triA, triB) => {
-        const aZ = (transformPoint(viewMatrix, mesh.vertices[triA[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[2]])[2]) / 3;
-        const bZ = (transformPoint(viewMatrix, mesh.vertices[triB[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[2]])[2]) / 3;
-        return bZ - aZ; // sort back to front
-    });
+function buildDrawingList(objs, camera){
+    const drawList = [];
+    for (let obj of objs){
+        obj.projectedCloud = obj.currentCloud.map(point => camera.project(point));
+        for (let tri of obj.triangles){
+            if (triangleOutsideCameraView(obj, tri)) continue;
+            if (isBackFaceCamera(obj, tri)) continue;
+            const a = obj.projectedCloud[tri[0]];
+            const b = obj.projectedCloud[tri[1]];
+            const c = obj.projectedCloud[tri[2]];
+            drawList.push({obj, tri, z: (a[2]+b[2]+c[2])/3});
+        }
+    }
+    drawList.sort((a,b) => b.z - a.z);
+    return drawList;
 }
-function getTrianglesSortedByDepth(mesh, camera){
-    const viewMatrix = camera.getViewMatrix();
-    return [...mesh.triangles].sort((triA, triB) => {
-        const aZ = (transformPoint(viewMatrix, mesh.vertices[triA[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triA[2]])[2]) / 3;
-        const bZ = (transformPoint(viewMatrix, mesh.vertices[triB[0]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[1]])[2] + transformPoint(viewMatrix, mesh.vertices[triB[2]])[2]) / 3;
-        return bZ - aZ; // sort back to front
-    });
-}
-function draw(obj){
-    //instead of individual obj, cache all objects, sort triangles, and draw?
-    const projectedPoints = obj.currentCloud.map(point => camera.project(point));
-    const sortedTriangles = getTrianglesSortedByDepth(obj, camera);
-    
+function drawScene(objs, camera){
     let ind = 0
     ctx.beginPath();
     let colorInd = {
@@ -358,18 +367,20 @@ function draw(obj){
         9: "#A0F",
         10: "#F0F"
     }
-    for(let tri of sortedTriangles){
-        if (isBackFace(obj, tri, camera)) continue; // backface culling
-        const p1 = camToCanvas(projectedPoints[tri[0]]);
-        const p2 = camToCanvas(projectedPoints[tri[1]]);
-        const p3 = camToCanvas(projectedPoints[tri[2]]);
-        fillPolygon([p1, p2, p3], colorInd[ind % 10]);
+    const drawList = buildDrawingList(objs, camera);
+
+    for (const item of drawList){
+        const {obj, tri, z} = item;
+        const a = obj.projectedCloud[tri[0]];
+        const b = obj.projectedCloud[tri[1]];
+        const c = obj.projectedCloud[tri[2]];
+        fillPolygon([a, b, c], colorInd[ind % 10]);
         ind++;
         ctx.strokeStyle = "black";
         ctx.beginPath();
-        ctx.moveTo(p1[0], p1[1]);
-        ctx.lineTo(p2[0], p2[1]);
-        ctx.lineTo(p3[0], p3[1]);
+        ctx.moveTo(a[0], a[1]);
+        ctx.lineTo(b[0], b[1]);
+        ctx.lineTo(c[0], c[1]);
         ctx.closePath();
         ctx.stroke();
     }
@@ -426,8 +437,9 @@ function animateDebug(){
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     objs.forEach(obj => {
         obj.update();
-        draw(obj);
+        toCameraSpaceVertices(obj, camera);
     });
+    drawScene(objs, camera);
     pyramid.rot[1] += 0.01;
     requestAnimationFrame(animateDebug);
 }
