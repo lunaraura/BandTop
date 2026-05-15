@@ -1,6 +1,9 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+
+const drawList = [];
+
 const v = (x,y,z) => [x,y,z,0];
 const v3 = (x,y,z) => [x,y,z];
 const add3 = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
@@ -135,54 +138,7 @@ function enhanceMeshResolution(rigidBody, divideByN){
 const vAdd = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2], 0];
 const vSub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2], 0];
 const vMul = (v, s) => [v[0]*s, v[1]*s, v[2]*s, 0];
-const matMult = (a,b) => {
-    // general matrix multiplication: a (m x n) * b (n x p) => res (m x p)
-    const m = a.length;
-    const n = a[0].length;
-    const p = b[0].length;
-    const res = new Array(m);
-    for (let i = 0; i < m; i++) {
-        res[i] = new Array(p).fill(0);
-        for (let j = 0; j < p; j++) {
-            let sum = 0;
-            for (let k = 0; k < n; k++) {
-                sum += a[i][k] * b[k][j];
-            }
-            res[i][j] = sum;
-        }
-    }
-    return res;
-}
-const rotX = (x) =>{return [
-    [1, 0, 0, 0],
-    [0, Math.cos(x), -Math.sin(x), 0],
-    [0, Math.sin(x), Math.cos(x), 0],
-    [0, 0, 0, 1]
-];}
-const rotY = (y) =>{return [
-    [Math.cos(y), 0, Math.sin(y), 0],
-    [0, 1, 0, 0],
-    [-Math.sin(y), 0, Math.cos(y), 0],
-    [0, 0, 0, 1]
-];}
-const rotZ = (z) =>{return [
-    [Math.cos(z), -Math.sin(z), 0, 0],
-    [Math.sin(z), Math.cos(z), 0, 0],
-    [0, 0, 1, 0],
-    [0, 0, 0, 1]
-];}
-const scale = (s) =>{return [
-    [s, 0, 0, 0],
-    [0, s, 0, 0],
-    [0, 0, s, 0],
-    [0, 0, 0, 1]
-];}
-const translate = (x,y,z) =>{return [
-    [1, 0, 0, x],
-    [0, 1, 0, y],
-    [0, 0, 1, z],
-    [0, 0, 0, 1]
-];}
+
 
 class Camera{
     constructor(){
@@ -203,13 +159,13 @@ class Camera{
     }
 }
 class Light {
-    constructor(pos, rot){
+    constructor(pos = v(0,0,0), rot = v(0,0,0)){
         this.pos = pos;
         this.rot = rot;
+        this.dir = normalize3([-0.4, -0.7, 1.0]);
         this.strength = 1;
-        this.ambient = 0.25
+        this.ambient = 0.25;
         this.shadow = 0;
-
     }
 }
 class RigidBody{
@@ -284,19 +240,6 @@ const predefinedShapesTwo = {
         ]
     }
 }
-function isBackFaceCamera(obj, i0, i1, i2){
-    const n = getTriangleNormalCamera(obj, i0, i1, i2);
-
-    const nx = n[0];
-    const ny = n[1];
-    const nz = n[2];
-
-    const ax = n[3];
-    const ay = n[4];
-    const az = n[5];
-
-    return (nx * ax + ny * ay + nz * az) <= 0;
-}
 function triangleOutsideCameraView(obj, i0, i1, i2, camera){
     const cam = obj.camera;
 
@@ -326,16 +269,17 @@ function triangleOutsideCameraView(obj, i0, i1, i2, camera){
 
     return false;
 }
-function getTriangleNormalCamera(obj, i0, i1, i2){
+
+function getTriangleInfoCamera(obj, i0, i1, i2, light){
     const cam = obj.camera;
 
     const ai = i0 * 3;
     const bi = i1 * 3;
     const ci = i2 * 3;
 
-    const ax = cam[ai], ay = cam[ai+1], az = cam[ai+2];
-    const bx = cam[bi], by = cam[bi+1], bz = cam[bi+2];
-    const cx = cam[ci], cy = cam[ci+1], cz = cam[ci+2];
+    const ax = cam[ai], ay = cam[ai + 1], az = cam[ai + 2];
+    const bx = cam[bi], by = cam[bi + 1], bz = cam[bi + 2];
+    const cx = cam[ci], cy = cam[ci + 1], cz = cam[ci + 2];
 
     const abx = bx - ax, aby = by - ay, abz = bz - az;
     const acx = cx - ax, acy = cy - ay, acz = cz - az;
@@ -344,44 +288,31 @@ function getTriangleNormalCamera(obj, i0, i1, i2){
     let ny = abz * acx - abx * acz;
     let nz = abx * acy - aby * acx;
 
-    const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
     if (len > 0) {
         nx /= len;
         ny /= len;
         nz /= len;
     }
 
-    return [nx, ny, nz, ax, ay, az];
-}
-function getTriangleLight(obj, i0, i1, i2){
-    const n = getTriangleNormalCamera(obj, i0, i1, i2);
+    const backface = (nx * ax + ny * ay + nz * az) <= 0;
 
-    const nx = n[0];
-    const ny = n[1];
-    const nz = n[2];
+    let intensity =
+        nx * light.dir[0] +
+        ny * light.dir[1] +
+        nz * light.dir[2];
 
-    // Directional light in camera space.
-    // This means the light follows the camera.
-    const lx = -0.4;
-    const ly = -0.7;
-    const lz = 1.0;
-
-    const len = Math.sqrt(lx*lx + ly*ly + lz*lz);
-    const nlx = lx / len;
-    const nly = ly / len;
-    const nlz = lz / len;
-
-    let intensity = nx * nlx + ny * nly + nz * nlz;
-
-    const ambient = 0.25;
     intensity = Math.max(0, intensity);
-    intensity = ambient + intensity * (1 - ambient);
+    intensity = light.ambient + intensity * light.strength * (1 - light.ambient);
 
-    return intensity;
+    return {
+        backface,
+        light: intensity
+    };
 }
 function buildDrawingList(objs, camera, lights){
-    const drawList = [];
-
+    const light = lights[0];
+    drawList.length = 0;
     for (let objIndex = 0; objIndex < objs.length; objIndex++){
         const obj = objs[objIndex];
         const cam = obj.camera;
@@ -393,18 +324,20 @@ function buildDrawingList(objs, camera, lights){
             const i2 = tris[triIndex + 2];
 
             if (triangleOutsideCameraView(obj, i0, i1, i2, camera)) continue;
-            if (isBackFaceCamera(obj, i0, i1, i2)) continue;
+
+            const info = getTriangleInfoCamera(obj, i0, i1, i2, light);
+            if (info.backface) continue;
 
             const z = (
                 cam[i0 * 3 + 2] +
                 cam[i1 * 3 + 2] +
                 cam[i2 * 3 + 2]
             ) / 3;
-            drawList.push({ obj, i0, i1, i2, z , light:getTriangleLight(obj,i0,i1,i2)});
+
+            drawList.push([obj, i0, i1, i2, z, info.light]);
         }
     }
-
-    drawList.sort((a, b) => b.z - a.z);
+    drawList.sort((a, b) => b[4] - a[4]);
     return drawList;
 }
 function updateWorldVertices(obj){
@@ -491,11 +424,6 @@ const fillPolygon = (points, color) => {
     ctx.fill();
 }
 
-function raycastNormal(point){
-    const dir = normalize3(sub3(point, camera.pos));
-    const hit = raycastFace([camera.pos[0], camera.pos[1], camera.pos[2]], dir, cube);
-    return hit ? hit.normal : null;
-}
 function drawNormalAtHit(){
     const origin = [camera.pos[0], camera.pos[1], camera.pos[2]];
     const normal = raycastNormal(cube.pos);
@@ -531,27 +459,14 @@ function drawScene(objs, camera){
     const drawList = buildDrawingList(objs, camera, lights);
 
     for (const item of drawList){
-        const baseColor = item.obj.baseColor;
-        const shade = Math.floor(255 * item.light)
+        const obj = item[0];
+        const baseColor = obj.baseColor;
+        const shade = Math.floor(255 * item[5]);
         const color = `rgb(${baseColor[0] * shade}, ${baseColor[1] * shade}, ${baseColor[2] * shade})`;
-        drawTriangle(item.obj, item.i0, item.i1, item.i2, color);
+
+        drawTriangle(obj, item[1], item[2], item[3], color);
     }
 }
-document.getElementById("canvas").addEventListener("click", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    const rayTarget = [
-        (mouseX / canvas.width) * 2 - 1,
-        -(mouseY / canvas.height) * 2 + 1,
-        1
-    ];
-    const rayDir = normalize3( rayTarget);
-    const hit = raycastFace(camera.pos, rayDir, cube);
-    if (hit) {
-        console.log("Hit at:", hit.point, "Normal:", hit.normal);
-    }
-});
 //event listener key
 document.addEventListener("keydown", (e) => {
     const step = 0.01;
