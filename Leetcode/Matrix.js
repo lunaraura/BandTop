@@ -197,7 +197,21 @@ class RigidBody{
         this.world = new Float32Array(flat.length)
         this.camera = new Float32Array(flat.length)
         this.screen = new Float32Array((flat.length/3)*2)
-        
+        let maxDistSq = 0;
+
+        for (let i = 0; i < flat.length; i += 3){
+            const x = flat[i];
+            const y = flat[i + 1];
+            const z = flat[i + 2];
+
+            const d = x*x + y*y + z*z;
+
+            if (d > maxDistSq){
+                maxDistSq = d;
+            }
+        }
+
+        this.boundingRadius = Math.sqrt(maxDistSq);
         this.triangles = new Uint32Array(flatTris)
     }
 }
@@ -239,6 +253,32 @@ const predefinedShapesTwo = {
             [0,3,2,1]
         ]
     }
+}
+function objectInFrustum(obj, camera){
+
+    const x = obj.pos[0] - camera.pos[0];
+    const y = obj.pos[1] - camera.pos[1];
+    const z = obj.pos[2] - camera.pos[2];
+
+    const radius = obj.boundingRadius * obj.scale;
+
+    // near/far
+    if (z + radius < camera.near) return false;
+    if (z - radius > camera.far) return false;
+
+    // horizontal
+    const xLimit = z * camera.aspect / camera.f;
+
+    if (x + radius < -xLimit) return false;
+    if (x - radius >  xLimit) return false;
+
+    // vertical
+    const yLimit = z / camera.f;
+
+    if (y + radius < -yLimit) return false;
+    if (y - radius >  yLimit) return false;
+
+    return true;
 }
 function triangleOutsideCameraView(obj, i0, i1, i2, camera){
     const cam = obj.camera;
@@ -318,6 +358,9 @@ function buildDrawingList(objs, camera, lights){
         const cam = obj.camera;
         const tris = obj.triangles;
 
+        if (!objectInFrustum(obj, camera)){
+            continue;
+        }
         for (let triIndex = 0; triIndex < tris.length; triIndex += 3){
             const i0 = tris[triIndex];
             const i1 = tris[triIndex + 1];
