@@ -1,237 +1,470 @@
 const canvas = document.getElementById("canvas");
+if (!canvas) throw new Error("Missing canvas element with id='canvas'.");
+
 const ctx = canvas.getContext("2d");
+if (!ctx) throw new Error("Could not get 2D canvas context.");
 
-const v = (x,y) => { return {x:x,y:y} }
+const v = (x = 0, y = 0) => ({ x, y });
 
-class RigidBody{
-    constructor(pos, rot = 0){
+const add = (a, b) => v(a.x + b.x, a.y + b.y);
+const sub = (a, b) => v(a.x - b.x, a.y - b.y);
+const mul = (a, s) => v(a.x * s, a.y * s);
+const dot = (a, b) => a.x * b.x + a.y * b.y;
+const cross = (a, b) => a.x * b.y - a.y * b.x;
+const lenSq = a => a.x * a.x + a.y * a.y;
+const len = a => Math.sqrt(lenSq(a));
+const clamp = (x, min, max) => Math.max(min, Math.min(max, x));
+
+class RigidBody {
+    constructor(pos, rot = 0) {
         this.pos = v(pos.x, pos.y);
+        this.prevPos = v(pos.x, pos.y);
+
         this.rot = rot;
+        this.prevRot = rot;
+
         this.centerOfMass = v(pos.x, pos.y);
-        this.elasticity = 0.4;
-        this.mass = 0;
-        this.inertia = 0;
-        this.vel = v(0,0);
+
+        this.mass = 1;
+        this.invMass = 1;
+
+        this.inertia = 1;
+        this.invInertia = 1;
+
+        this.elasticity = 0.35;
+        this.staticFriction = 0.8;
+        this.kineticFriction = 0.55;
+
+        this.vel = v(0, 0);
         this.angVel = 0;
+
+        this.gravity = 0.1;
+        this.linearDamping = 0.998;
+        this.angularDamping = 0.995;
+
         this.mesh = [];
         this.sizeRadius = 0;
-        this.skipCalculations = false;
+
+        this.sleeping = false;
+        this.sleepSpeed = 0.015;
+        this.sleepAngularSpeed = 0.002;
+        this.sleepFramesRequired = 40;
+        this.sleepCounter = 0;
+
+        this.contactIterations = 8;
+        this.positionCorrectionPercent = 0.85;
+        this.positionSlop = 0.01;
     }
-    initialize(pointCloud){
+
+    initialize(pointCloud) {
+        if (!pointCloud.length) {
+            throw new Error("RigidBody requires at least one point.");
+        }
+
         let totalMass = 0;
-        let weightedCenter = v(0,0);
-        for (let i = 0; i < pointCloud.length; i++){
-            const point = pointCloud[i];
-            totalMass += point.mass;
-            weightedCenter.x += point.pos.x * point.mass;
-            weightedCenter.y += point.pos.y * point.mass;
+        let weightedCenter = v(0, 0);
+
+        for (const point of pointCloud) {
+            const m = point.mass ?? 1;
+            totalMass += m;
+            weightedCenter.x += point.pos.x * m;
+            weightedCenter.y += point.pos.y * m;
         }
-        const center = v(weightedCenter.x / totalMass, weightedCenter.y / totalMass);
-        this.mesh = pointCloud.map(point => ({
-            localPos: v(point.pos.x - center.x, point.pos.y - center.y),
-            pos: v(this.pos.x, this.pos.y),
-            mass: point.mass,
-            friction: point.friction,
-        }));
-        this.mass = totalMass || 1;
+
+        if (totalMass <= 0) totalMass = 1;
+
+        const localCenter = v(
+            weightedCenter.x / totalMass,
+            weightedCenter.y / totalMass
+        );
+
+        this.mesh = pointCloud.map(point => {
+            const m = point.mass ?? 1;
+            const f = point.friction ?? 1;
+
+            return {
+                localPos: v(
+                    point.pos.x - localCenter.x,
+                    point.pos.y - localCenter.y
+                ),
+                pos: v(this.pos.x, this.pos.y),
+                prevPos: v(this.pos.x, this.pos.y),
+                mass: m,
+                friction: f
+            };
+        });
+
+        this.mass = totalMass;
+        this.invMass = 1 / this.mass;
+
         this.inertia = this.mesh.reduce((sum, p) => {
-            const r2 = p.localPos.x * p.localPos.x + p.localPos.y * p.localPos.y;
-            return sum + p.mass * r2;
-        }, 0) || 1;
+            return sum + p.mass * lenSq(p.localPos);
+        }, 0);
+
+        if (this.inertia <= 0) this.inertia = 1;
+        this.invInertia = 1 / this.inertia;
+
         this.centerOfMass = v(this.pos.x, this.pos.y);
+
+        this.sizeRadius = Math.max(
+            ...this.mesh.map(p => len(p.localPos))
+        );
+
         this.updateWorldPositions();
-        this.sizeRadius = Math.max(...this.mesh.map(p => Math.sqrt(p.localPos.x * p.localPos.x + p.localPos.y * p.localPos.y)));
+        this.savePreviousWorldPositions();
     }
-    calculateCenterOfMass(){
-        return v(this.pos.x, this.pos.y);
-    }
-    checkResolveGroundedStatic(){
-        if (this.pos.y < canvas.height - this.sizeRadius) {
-            this.skipCalculations = false;
-            return;
-        }
-        const totalVelocity = Math.sqrt(this.vel.x * this.vel.x + this.vel.y * this.vel.y);
-        if (totalVelocity < 0.01){
-            this.vel.x = 0;
-            this.vel.y = 0;
-            this.angVel = 0;
-            this.skipCalculations = true
-        } else {
-            this.skipCalculations = false;
-        }
-    }
-    localToWorld(local){
-        const cos = Math.cos(this.rot);
-        const sin = Math.sin(this.rot);
+
+    localToWorld(local) {
+        const c = Math.cos(this.rot);
+        const s = Math.sin(this.rot);
+
         return {
-            x: this.pos.x + local.x * cos - local.y * sin,
-            y: this.pos.y + local.x * sin + local.y * cos,
+            x: this.pos.x + local.x * c - local.y * s,
+            y: this.pos.y + local.x * s + local.y * c
         };
     }
-    updateWorldPositions(){
-        for (let i = 0; i < this.mesh.length; i++){
-            const point = this.mesh[i];
+
+    updateWorldPositions() {
+        for (const point of this.mesh) {
             const world = this.localToWorld(point.localPos);
             point.pos.x = world.x;
             point.pos.y = world.y;
         }
     }
-    update(){
-        this.checkResolveGroundedStatic();
-        if (this.skipCalculations) return;
-        this.applyGravity();
+
+    savePreviousWorldPositions() {
+        this.prevPos.x = this.pos.x;
+        this.prevPos.y = this.pos.y;
+        this.prevRot = this.rot;
+
+        for (const point of this.mesh) {
+            point.prevPos.x = point.pos.x;
+            point.prevPos.y = point.pos.y;
+        }
+    }
+
+    getPointVelocity(r) {
+        return {
+            x: this.vel.x - this.angVel * r.y,
+            y: this.vel.y + this.angVel * r.x
+        };
+    }
+
+    applyImpulse(impulse, r) {
+        this.vel.x += impulse.x * this.invMass;
+        this.vel.y += impulse.y * this.invMass;
+        this.angVel += cross(r, impulse) * this.invInertia;
+    }
+
+    applyGravity() {
+        this.vel.y += this.gravity;
+    }
+
+    applyDamping() {
+        this.vel.x *= this.linearDamping;
+        this.vel.y *= this.linearDamping;
+        this.angVel *= this.angularDamping;
+    }
+
+    wake() {
+        this.sleeping = false;
+        this.sleepCounter = 0;
+    }
+
+    updateSleepState(contacts) {
+        const speed = len(this.vel);
+
+        const touchingGround = contacts.some(c => c.normal.y < 0);
+
+        if (
+            touchingGround &&
+            speed < this.sleepSpeed &&
+            Math.abs(this.angVel) < this.sleepAngularSpeed
+        ) {
+            this.sleepCounter++;
+
+            if (this.sleepCounter >= this.sleepFramesRequired) {
+                this.vel.x = 0;
+                this.vel.y = 0;
+                this.angVel = 0;
+                this.sleeping = true;
+            }
+        } else {
+            this.sleepCounter = 0;
+            this.sleeping = false;
+        }
+    }
+
+    integrateVelocity() {
         this.pos.x += this.vel.x;
         this.pos.y += this.vel.y;
         this.rot += this.angVel;
-        this.updateWorldPositions();
-        this.resolveCollisions();
-        this.updateWorldPositions();
-        this.centerOfMass = this.calculateCenterOfMass();
     }
-    resolveCollisions(){
-        for (let i = 0; i < this.mesh.length; i++){
-            const point = this.mesh[i];
-            const normal = this.getBoundaryNormal(point);
-            if (!normal){
-                continue;
+
+    update() {
+        this.savePreviousWorldPositions();
+
+        if (!this.sleeping) {
+            this.applyGravity();
+            this.applyDamping();
+            this.integrateVelocity();
+            this.updateWorldPositions();
+        }
+
+        this.applyBasicCCD();
+        this.updateWorldPositions();
+
+        const contacts = this.gatherContacts();
+
+        if (contacts.length > 0) {
+            this.wake();
+            this.solveContacts(contacts);
+            this.correctPosition(contacts);
+            this.updateWorldPositions();
+
+            const postCorrectionContacts = this.gatherContacts();
+            this.updateSleepState(postCorrectionContacts);
+        }
+
+        this.centerOfMass = v(this.pos.x, this.pos.y);
+    }
+
+    gatherContacts() {
+        const contacts = [];
+
+        for (const point of this.mesh) {
+            if (point.pos.x < 0) {
+                contacts.push({
+                    point,
+                    normal: v(1, 0),
+                    penetration: -point.pos.x
+                });
             }
-            const r = {
-                x: point.pos.x - this.pos.x,
-                y: point.pos.y - this.pos.y,
-            };
-            const pointVel = {
-                x: this.vel.x - this.angVel * r.y,
-                y: this.vel.y + this.angVel * r.x,
-            };
-            const normalVel = pointVel.x * normal.x + pointVel.y * normal.y;
-            const tangent = {x: -normal.y, y: normal.x};
-            const tangentVel = pointVel.x * tangent.x + pointVel.y * tangent.y;
-            const invMass = 1 / this.mass;
-            const rn = r.x * normal.y - r.y * normal.x;
-            const denomN = invMass + (rn * rn) / this.inertia;
-            const jn = -(1 + this.elasticity) * normalVel / denomN;
-            const frictionMax = Math.abs(jn) * point.friction;
-            const rt = r.x * tangent.y - r.y * tangent.x;
-            const denomT = invMass + (rt * rt) / this.inertia;
-            let jt = -tangentVel / denomT;
-            if (jt > frictionMax) jt = frictionMax;
-            if (jt < -frictionMax) jt = -frictionMax;
-            const impulse = {
-                x: normal.x * jn + tangent.x * jt,
-                y: normal.y * jn + tangent.y * jt,
-            };
-            this.applyImpulse(impulse, r);
-            const penetration = this.getPenetrationDepth(point, normal);
-            this.pos.x += normal.x * penetration;
-            this.pos.y += normal.y * penetration;
+
+            if (point.pos.x > canvas.width) {
+                contacts.push({
+                    point,
+                    normal: v(-1, 0),
+                    penetration: point.pos.x - canvas.width
+                });
+            }
+
+            if (point.pos.y < 0) {
+                contacts.push({
+                    point,
+                    normal: v(0, 1),
+                    penetration: -point.pos.y
+                });
+            }
+
+            if (point.pos.y > canvas.height) {
+                contacts.push({
+                    point,
+                    normal: v(0, -1),
+                    penetration: point.pos.y - canvas.height
+                });
+            }
+        }
+
+        return contacts;
+    }
+
+    solveContacts(contacts) {
+        for (let iter = 0; iter < this.contactIterations; iter++) {
+            for (const contact of contacts) {
+                const point = contact.point;
+                const normal = contact.normal;
+
+                const r = sub(point.pos, this.pos);
+                const pointVel = this.getPointVelocity(r);
+
+                const normalVel = dot(pointVel, normal);
+
+                if (normalVel > 0) continue;
+
+                const rn = cross(r, normal);
+                const denomN = this.invMass + rn * rn * this.invInertia;
+
+                if (denomN <= 0) continue;
+
+                const jn = -(1 + this.elasticity) * normalVel / denomN;
+
+                const tangent = v(-normal.y, normal.x);
+                const tangentVel = dot(pointVel, tangent);
+
+                const rt = cross(r, tangent);
+                const denomT = this.invMass + rt * rt * this.invInertia;
+
+                let jt = 0;
+
+                if (denomT > 0) {
+                    const desiredStaticImpulse = -tangentVel / denomT;
+                    const staticLimit = Math.abs(jn) * this.staticFriction * point.friction;
+
+                    if (Math.abs(desiredStaticImpulse) <= staticLimit) {
+                        jt = desiredStaticImpulse;
+                    } else {
+                        const kineticLimit = Math.abs(jn) * this.kineticFriction * point.friction;
+                        jt = clamp(desiredStaticImpulse, -kineticLimit, kineticLimit);
+                    }
+                }
+
+                const impulse = add(
+                    mul(normal, jn),
+                    mul(tangent, jt)
+                );
+
+                this.applyImpulse(impulse, r);
+
+                this.updateWorldPositions();
+            }
         }
     }
-    getBoundaryNormal(point){
-        if (point.pos.x < 0) return {x: 1, y: 0};
-        if (point.pos.x > canvas.width) return {x: -1, y: 0};
-        if (point.pos.y < 0) return {x: 0, y: 1};
-        if (point.pos.y > canvas.height) return {x: 0, y: -1};
-        return null;
+
+    correctPosition(contacts) {
+        let correction = v(0, 0);
+        let count = 0;
+
+        for (const contact of contacts) {
+            const depth = Math.max(contact.penetration - this.positionSlop, 0);
+
+            if (depth <= 0) continue;
+
+            correction.x += contact.normal.x * depth;
+            correction.y += contact.normal.y * depth;
+            count++;
+        }
+
+        if (count === 0) return;
+
+        correction.x = correction.x / count * this.positionCorrectionPercent;
+        correction.y = correction.y / count * this.positionCorrectionPercent;
+
+        this.pos.x += correction.x;
+        this.pos.y += correction.y;
     }
-    getPenetrationDepth(point, normal){
-        if (normal.x === 1) return -point.pos.x;
-        if (normal.x === -1) return point.pos.x - canvas.width;
-        if (normal.y === 1) return -point.pos.y;
-        if (normal.y === -1) return point.pos.y - canvas.height;
-        return 0;
-    }
-    applyImpulse(impulse, r){
-        this.vel.x += impulse.x / this.mass;
-        this.vel.y += impulse.y / this.mass;
-        const torque = r.x * impulse.y - r.y * impulse.x;
-        this.angVel += torque / this.inertia;
-    }
-    applyGravity(){
-        this.vel.y += 0.1; // Simple gravity effect
+
+    applyBasicCCD() {
+        let earliestT = 1;
+        let hitNormal = null;
+
+        for (const point of this.mesh) {
+            const from = point.prevPos;
+            const to = point.pos;
+            const motion = sub(to, from);
+
+            if (motion.x < 0) {
+                const t = (0 - from.x) / motion.x;
+                if (t >= 0 && t < earliestT) {
+                    earliestT = t;
+                    hitNormal = v(1, 0);
+                }
+            }
+
+            if (motion.x > 0) {
+                const t = (canvas.width - from.x) / motion.x;
+                if (t >= 0 && t < earliestT) {
+                    earliestT = t;
+                    hitNormal = v(-1, 0);
+                }
+            }
+
+            if (motion.y < 0) {
+                const t = (0 - from.y) / motion.y;
+                if (t >= 0 && t < earliestT) {
+                    earliestT = t;
+                    hitNormal = v(0, 1);
+                }
+            }
+
+            if (motion.y > 0) {
+                const t = (canvas.height - from.y) / motion.y;
+                if (t >= 0 && t < earliestT) {
+                    earliestT = t;
+                    hitNormal = v(0, -1);
+                }
+            }
+        }
+
+        if (!hitNormal || earliestT >= 1) return;
+
+        this.pos.x = this.prevPos.x + (this.pos.x - this.prevPos.x) * earliestT;
+        this.pos.y = this.prevPos.y + (this.pos.y - this.prevPos.y) * earliestT;
+        this.rot = this.prevRot + (this.rot - this.prevRot) * earliestT;
+
+        const vn = dot(this.vel, hitNormal);
+
+        if (vn < 0) {
+            this.vel.x -= (1 + this.elasticity) * vn * hitNormal.x;
+            this.vel.y -= (1 + this.elasticity) * vn * hitNormal.y;
+        }
     }
 }
 
 const meshDefs = {
     stick: [
-        {pos: v(-100,0), mass: 1, friction: 1},
-        {pos: v(100,0), mass: 1, friction: 1},
+        { pos: v(-100, 0), mass: 1, friction: 1 },
+        { pos: v(100, 0), mass: 1, friction: 1 }
     ],
+
     triangle: [
-        {pos: v(10,10), mass: 1, friction: 1},
-        {pos: v(-10,10), mass: 1, friction: 1},
-        {pos: v(10,-10), mass: 1, friction: 1},
+        { pos: v(10, 10), mass: 1, friction: 1 },
+        { pos: v(-10, 10), mass: 1, friction: 1 },
+        { pos: v(10, -10), mass: 1, friction: 1 }
     ],
+
     triangleHeavy: [
-        {pos: v(10,10), mass: 1, friction: 1},
-        {pos: v(-10,10), mass: 10, friction: 1},
-        {pos: v(10,-10), mass: 1, friction: 1},
+        { pos: v(10, 10), mass: 1, friction: 1 },
+        { pos: v(-10, 10), mass: 10, friction: 1 },
+        { pos: v(10, -10), mass: 1, friction: 1 }
     ]
-}
+};
 
-let rigidBodies = [];
+const rigidBodies = [];
 
-function createRigidBody(meshDef, pos, rot = 0){
+function createRigidBody(meshDef, pos, rot = 0) {
     const body = new RigidBody(pos, rot);
     body.initialize(meshDef);
     rigidBodies.push(body);
+    return body;
 }
-function drawRigidBody (body) {
+
+function drawRigidBody(body) {
+    if (body.mesh.length === 0) return;
+
     ctx.beginPath();
     ctx.moveTo(body.mesh[0].pos.x, body.mesh[0].pos.y);
-    for (let i = 1; i < body.mesh.length; i++){
+
+    for (let i = 1; i < body.mesh.length; i++) {
         const point = body.mesh[i];
         ctx.lineTo(point.pos.x, point.pos.y);
     }
-    ctx.lineTo(body.mesh[0].pos.x, body.mesh[0].pos.y);
-    ctx.closePath();
+
+    if (body.mesh.length > 2) {
+        ctx.closePath();
+    }
+
     ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(body.pos.x, body.pos.y, 3, 0, Math.PI * 2);
+    ctx.fill();
 }
 
+createRigidBody(meshDefs.triangle, v(180, 100), 0.3);
+createRigidBody(meshDefs.triangleHeavy, v(240, 100), -0.5);
 
-createRigidBody(meshDefs.triangle, v(200,100));
-createRigidBody(meshDefs.triangleHeavy, v(200,100));
-ctx.lineWidth = 5
+ctx.lineWidth = 3;
 
-function update(){
+function update() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (let i = 0; i < rigidBodies.length; i++){
-        const body = rigidBodies[i];
+
+    for (const body of rigidBodies) {
         body.update();
         drawRigidBody(body);
     }
+
     requestAnimationFrame(update);
 }
-update();
 
-// 1. Solve multiple contacts together
-// Gather all colliding vertices each frame.
-// Compute a combined impulse solution instead of applying one vertex at a time.
-// This is the biggest accuracy improvement for real rigid-body behavior.
-// Maybe use flags to find contacts at the same time in the step-velocity and then calculate stuff
-// 2. Improve boundary contact handling
-// Use a proper contact normal and penetration correction per vertex.
-// Handle corner contacts by detecting both axes and resolving them together.
-// Avoid moving this.pos separately for each vertex; instead compute a single correction from the set of contacts.
-// 3. Separate normal and friction impulses correctly
-// Keep normal impulse jn and friction impulse jt separate.
-// Use friction limits based on |jn| * friction.
-// Add static friction behavior:
-// if tangential relative velocity is below a threshold, try to zero it
-// otherwise apply kinetic friction
-// 4. Use proper rigid-body kinematics
-// Compute point world velocity from vel and angVel via v_point = v_body + omega × r.
-// Update body vel / angVel from impulses only after solving all contacts, not inside per-vertex iteration.
-// 5. Fix penetration correction
-// After impulse resolution, apply a single consistent position correction.
-// For each contact, project out penetration along the normal.
-// Blend corrections if multiple contacts exist to avoid nonphysical translation.
-// 6. Add continuous collision detection (CCD)
-// Raycast vertex motion against boundaries between frames.
-// Detect the exact impact time instead of only reacting after overlap.
-// This prevents tunneling at high speed.
-// 7. Add damping and energy loss
-// Apply a small drag factor to vel and angVel.
-// This makes motion more realistic and prevents perpetual bouncing.
-// 8. Optional: upgrade contact model
-// Treat edges instead of only vertices.
-// Or approximate a convex hull and use actual contact geometry.
+update();
