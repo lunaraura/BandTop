@@ -167,16 +167,113 @@
 </div>
 
 <div id="main">
-  <canvas id="canvas" width="640" height="640"></canvas>
+  <div style="display:flex; gap:16px;">
+    <div>
+      <div style="font-size:11px;color:#6b7785;margin-bottom:6px;">Negative W</div>
+      <canvas id="canvasNegW" width="640" height="640"></canvas>
+    </div>
+    <div>
+      <div style="font-size:11px;color:#6b7785;margin-bottom:6px;">Positive W</div>
+      <canvas id="canvasPosW" width="640" height="640"></canvas>
+    </div>
+  </div>
 </div>
 
 <script src="main0.js"></script>
 <script>
+  const canvasNegW = document.getElementById('canvasNegW');
+const ctxNegW = canvasNegW.getContext('2d');
+
+const canvasPosW = document.getElementById('canvasPosW');
+const ctxPosW = canvasPosW.getContext('2d');
+
+const cam = new Camera(canvasNegW);
+cam.configuration = "3D";
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const cam = new Camera(canvas);
 cam.configuration = "3D";
 
+function renderSplitWHits(ctxNeg, canvasNeg, ctxPos, canvasPos, layers, configuration, resX, resY) {
+    function clear(ctx, canvas) {
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = "#0a0e14";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = "lighter";
+    }
+
+    clear(ctxNeg, canvasNeg);
+    clear(ctxPos, canvasPos);
+
+    for (const layer of layers) {
+        if (Math.abs(layer.offset) < 1e-9) continue;
+
+        const isPositive = layer.offset > 0;
+        const ctx = isPositive ? ctxPos : ctxNeg;
+        const canvas = isPositive ? canvasPos : canvasNeg;
+
+        const alpha = Math.max(0.08, layer.alpha * 0.75);
+
+        let maxT = 1;
+        for (const h of layer.hits) {
+            if (h && h.t < Infinity) maxT = Math.max(maxT, h.t);
+        }
+
+        ctx.globalAlpha = alpha;
+
+        if (configuration === "3D") {
+            const cellW = canvas.width / resX;
+            const cellH = canvas.height / resY;
+
+            for (const h of layer.hits) {
+                if (!h) continue;
+
+                const depthShade = Math.max(0, 1 - h.t / maxT);
+                const base = 60 + depthShade * 195;
+
+                ctx.fillStyle = isPositive
+                    ? `rgb(${base * 0.25 | 0}, ${base * 0.55 | 0}, ${base | 0})`
+                    : `rgb(${base | 0}, ${base * 0.45 | 0}, ${base * 0.25 | 0})`;
+
+                ctx.fillRect(
+                    h.screenX * cellW,
+                    h.screenY * cellH,
+                    cellW + 1,
+                    cellH + 1
+                );
+            }
+        } else {
+            const cellW = canvas.width / resX;
+            const stripH = configuration === "1D" ? canvas.height : canvas.height * 0.5;
+            const stripY = configuration === "1D" ? 0 : canvas.height * 0.25;
+
+            for (const h of layer.hits) {
+                if (!h) continue;
+
+                const depthShade = Math.max(0, 1 - h.t / maxT);
+                const base = 60 + depthShade * 195;
+
+                ctx.fillStyle = isPositive
+                    ? `rgb(${base * 0.25 | 0}, ${base * 0.55 | 0}, ${base | 0})`
+                    : `rgb(${base | 0}, ${base * 0.45 | 0}, ${base * 0.25 | 0})`;
+
+                ctx.fillRect(
+                    h.screenX * cellW,
+                    stripY,
+                    cellW + 1,
+                    stripH
+                );
+            }
+        }
+    }
+
+    ctxNeg.globalAlpha = 1;
+    ctxNeg.globalCompositeOperation = "source-over";
+    ctxPos.globalAlpha = 1;
+    ctxPos.globalCompositeOperation = "source-over";
+}
+  
 const cubeMap = {};
 for (let i = 0; i < 8; i++) cubeMap[i] = squareMap[i];
 
@@ -195,7 +292,37 @@ function rebuildObject() {
     object.rot.zw = deg(document.getElementById('rotZW').value);
 }
 function deg(d) { return Number(d) * Math.PI / 180; }
+const t0 = performance.now();
 
+const layers = cam.raycastOverlay(object, resX, resY);
+
+renderSplitWHits(
+    ctxNegW,
+    canvasNegW,
+    ctxPosW,
+    canvasPosW,
+    layers,
+    cam.configuration,
+    resX,
+    resY
+);
+
+const t1 = performance.now();
+
+const hitCount = layers.reduce(
+    (sum, layer) => sum + layer.hits.filter(Boolean).length,
+    0
+);
+
+statsEl.textContent =
+`config:    ${cam.configuration}
+shape:     ${shapeName}
+rays:      ${resX * resY} x ${layers.length} W layers
+hits:      ${hitCount}
+edges:     ${object.getEdges().length}
+faces:     ${object.getFaces().length}
+tris:      ${object.getTriangles().length}
+cast time: ${(t1 - t0).toFixed(2)}ms`;
 function draw() {
     object.rot.xy = deg(document.getElementById('rotXY').value);
     object.rot.xz = deg(document.getElementById('rotXZ').value);
