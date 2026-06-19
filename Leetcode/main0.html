@@ -213,7 +213,16 @@ function draw() {
     const res = Number(document.getElementById('resSlider').value);
     const resX = res;
     const resY = cam.configuration === "3D" ? res : 1;
+const layers = cam.raycastOverlay(object, resX, resY);
 
+renderOverlayHits(
+    ctx,
+    canvas,
+    layers,
+    cam.configuration,
+    resX,
+    resY
+);
     const t0 = performance.now();
     const hits = cam.raycast(object, resX, resY);
     const t1 = performance.now();
