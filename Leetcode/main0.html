@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ND Raycaster — 1D / 2D / 3D / 4D</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #121821;
+    --line: #232b38;
+    --text: #d6dde6;
+    --muted: #6b7785;
+    --accent: #5fd4c8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    display: flex;
+    height: 100vh;
+  }
+  #sidebar {
+    width: 300px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    padding: 20px;
+    overflow-y: auto;
+  }
+  #main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 4px;
+  }
+  .sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin: 0 0 20px;
+  }
+  .group {
+    margin-bottom: 18px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .group:last-child { border-bottom: none; }
+  label {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .row { display: flex; gap: 6px; margin-bottom: 10px; }
+  button.cfg {
+    flex: 1;
+    background: #1a212c;
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 8px 0;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+  button.cfg.active {
+    background: var(--accent);
+    color: #06120f;
+    border-color: var(--accent);
+  }
+  button.cfg:hover:not(.active) { border-color: var(--accent); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .val { float: right; color: var(--accent); }
+  canvas {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    image-rendering: pixelated;
+  }
+  #stats {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.6;
+    white-space: pre;
+  }
+  select {
+    width: 100%;
+    background: #1a212c;
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>ND Raycaster</h1>
+  <p class="sub">Analytic ray vs edge/face intersection<br>Full 4D rotation + perspective w-divide</p>
+
+  <div class="group">
+    <label>Screen Configuration</label>
+    <div class="row">
+      <button class="cfg" data-cfg="1D">1D</button>
+      <button class="cfg" data-cfg="2D">2D</button>
+      <button class="cfg active" data-cfg="3D">3D</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <label>Shape</label>
+    <select id="shapeSelect">
+      <option value="cube">Cube (3D, 8 verts)</option>
+      <option value="tesseract" selected>Tesseract (4D, 16 verts)</option>
+    </select>
+  </div>
+
+  <div class="group">
+    <label>XY Rotation <span class="val" id="vXY">0°</span></label>
+    <input type="range" id="rotXY" min="0" max="360" value="0">
+    <label>XZ Rotation <span class="val" id="vXZ">0°</span></label>
+    <input type="range" id="rotXZ" min="0" max="360" value="0">
+    <label>XW Rotation <span class="val" id="vXW">0°</span></label>
+    <input type="range" id="rotXW" min="0" max="360" value="0">
+    <label>YW Rotation <span class="val" id="vYW">0°</span></label>
+    <input type="range" id="rotYW" min="0" max="360" value="0">
+    <label>ZW Rotation <span class="val" id="vZW">0°</span></label>
+    <input type="range" id="rotZW" min="0" max="360" value="0">
+  </div>
+
+  <div class="group">
+    <label>Camera Distance (z) <span class="val" id="vZ">5</span></label>
+    <input type="range" id="camZ" min="2" max="15" step="0.1" value="5">
+    <label>Camera W Position<span class ="val" id="vW">0</span></label>
+    <input type="range" id="camW" min="-8" max="8" step="0.1" value="0">
+  <label>W Tolerance</label>
+  <input type="range" id="wTolerance" min="0.1" max="15" step="0.1" value="2">    <label>Resolution <span class="val" id="vRes">48</span></label>
+    <input type="range" id="resSlider" min="8" max="120" step="4" value="48">
+  </div>
+
+  <div class="group">
+    <label>Auto-rotate</label>
+    <div class="row">
+      <button class="cfg" id="autoXW">Spin XW</button>
+      <button class="cfg" id="autoStop">Stop</button>
+    </div>
+  </div>
+
+  <div id="stats"></div>
+</div>
+
+<div id="main">
+  <canvas id="canvas" width="640" height="640"></canvas>
+</div>
+
+<script src="main0.js"></script>
+</body>
+</html>
