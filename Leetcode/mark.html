@@ -555,7 +555,118 @@ function simulateLeveragedETFFromUnderlying(path, {
 });
 
 console.log(summarizePaths(paths));
+const SCENARIO_PRESETS = {
+  chop: {
+    regimes: {
+      chop: {
+        name: "chop",
+        muPerTick: 0.0000,
+        sigmaPerTick: 0.0012,
+        jumpChance: 0.0005,
+        jumpMean: 0.0000,
+        jumpSigma: 0.004,
+        persistence: 0.97
+      },
+      trendUp: {
+        name: "trendUp",
+        muPerTick: 0.00025,
+        sigmaPerTick: 0.0018,
+        jumpChance: 0.001,
+        jumpMean: 0.002,
+        jumpSigma: 0.006,
+        persistence: 0.94
+      },
+      trendDown: {
+        name: "trendDown",
+        muPerTick: -0.00025,
+        sigmaPerTick: 0.0018,
+        jumpChance: 0.001,
+        jumpMean: -0.002,
+        jumpSigma: 0.006,
+        persistence: 0.94
+      },
+      squeeze: {
+        name: "squeeze",
+        muPerTick: 0.0008,
+        sigmaPerTick: 0.0035,
+        jumpChance: 0.003,
+        jumpMean: 0.006,
+        jumpSigma: 0.012,
+        persistence: 0.85
+      },
+      panic: {
+        name: "panic",
+        muPerTick: -0.0008,
+        sigmaPerTick: 0.0038,
+        jumpChance: 0.003,
+        jumpMean: -0.006,
+        jumpSigma: 0.014,
+        persistence: 0.85
+      }
+    }
+  },
 
+  highVol: {
+    regimes: {
+      chop: {
+        name: "chop",
+        muPerTick: 0.0000,
+        sigmaPerTick: 0.0025,
+        jumpChance: 0.0015,
+        jumpMean: 0.0000,
+        jumpSigma: 0.008,
+        persistence: 0.95
+      },
+      trendUp: {
+        name: "trendUp",
+        muPerTick: 0.00055,
+        sigmaPerTick: 0.0038,
+        jumpChance: 0.003,
+        jumpMean: 0.004,
+        jumpSigma: 0.012,
+        persistence: 0.92
+      },
+      trendDown: {
+        name: "trendDown",
+        muPerTick: -0.00055,
+        sigmaPerTick: 0.0042,
+        jumpChance: 0.003,
+        jumpMean: -0.004,
+        jumpSigma: 0.014,
+        persistence: 0.92
+      },
+      squeeze: {
+        name: "squeeze",
+        muPerTick: 0.0015,
+        sigmaPerTick: 0.007,
+        jumpChance: 0.008,
+        jumpMean: 0.010,
+        jumpSigma: 0.025,
+        persistence: 0.82
+      },
+      panic: {
+        name: "panic",
+        muPerTick: -0.0017,
+        sigmaPerTick: 0.008,
+        jumpChance: 0.009,
+        jumpMean: -0.012,
+        jumpSigma: 0.030,
+        persistence: 0.82
+      }
+    }
+  }
+};
+     console.log(runScenario({
+  scenarioName: "chop",
+  S0: 156,
+  levels: [150, 152, 154, 158, 160, 162, 165]
+}));
+
+console.log(runScenario({
+  scenarioName: "highVol",
+  S0: 156,
+  levels: [150, 152, 154, 158, 160, 162, 165]
+}));
 console.log(
   analyzeLadderTouches(paths, [
     150,
@@ -567,3 +678,67 @@ console.log(
     165
   ])
 );
+     function calibrateScenario({
+  scenarioName = "chop",
+  targetRangePct = 10,
+  tolerancePct = 2,
+  maxIterations = 20,
+  S0 = 156,
+  ticks = 390,
+  count = 1000
+}) {
+  const preset = structuredClone(SCENARIO_PRESETS[scenarioName]);
+
+  let scale = 1.0;
+
+  for (let i = 0; i < maxIterations; i++) {
+    const scaledRegimes = structuredClone(preset.regimes);
+
+    for (const key of Object.keys(scaledRegimes)) {
+      scaledRegimes[key].sigmaPerTick *= scale;
+      scaledRegimes[key].jumpSigma *= scale;
+    }
+
+    const paths = generatePaths({
+      count,
+      ticks,
+      S0,
+      startRegime: "chop",
+      regimes: scaledRegimes,
+      transitions: DEFAULT_TRANSITIONS
+    });
+
+    const summary = summarizePaths(paths);
+    const error = summary.avgRangePct - targetRangePct;
+
+    console.log({
+      iteration: i,
+      scale,
+      avgRangePct: summary.avgRangePct,
+      error
+    });
+
+    if (Math.abs(error) <= tolerancePct) {
+      return {
+        scale,
+        regimes: scaledRegimes,
+        summary
+      };
+    }
+
+    // If range is too high, lower volatility.
+    // If range is too low, raise volatility.
+    scale *= targetRangePct / summary.avgRangePct;
+  }
+
+  return null;
+}
+       const calibratedChop = calibrateScenario({
+  scenarioName: "chop",
+  targetRangePct: 10
+});
+
+console.log(calibratedChop);
+       const chopModel = calibrateScenario({ scenarioName: "chop", targetRangePct: 8 });
+const highVolModel = calibrateScenario({ scenarioName: "highVol", targetRangePct: 18 });
+const panicModel = calibrateScenario({ scenarioName: "highVol", targetRangePct: 30 });
