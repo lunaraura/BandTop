@@ -1,0 +1,21 @@
+function genGBMSeries(ticks, S0, mu, sigma, dt){
+  const series=;
+  for(let i=1;i<ticks;i++){
+     const z = BoxMuller(); // standard normal
+     const prev = series[i-1];
+     const next = prev * Math.exp((mu - 0.5*sigma*sigma)*dt + sigma*Math.sqrt(dt)*z);
+     series.push(next);
+  }
+  return series;
+}
+
+/* Antithetic variates for variance reduction */
+function generatePaths(count, ...gbmArgs){
+  const paths=[];
+  for(let i=0;i<count/2;i++){
+     const zSeq = Array.from({length:gbmArgs[0]-1},()=>BoxMuller());
+     paths.push(gbmFromZ(gbmArgs, zSeq));
+     paths.push(gbmFromZ(gbmArgs, zSeq.map(z=>-z))); // antithetic twin
+  }
+  return paths;
+}
