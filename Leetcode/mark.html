@@ -1,192 +1,569 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<title>Market Simulation – Optimal Buy/Sell Ladder</title>
-<style>
-  body{font-family:Arial,Helvetica,sans-serif;background:#111;color:#eee;margin:0;padding:20px}
-  h1{margin-top:0;text-align:center}
-  #controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;max-width:820px;margin:0 auto 20px}
-  label{display:flex;flex-direction:column;font-size:0.85rem}
-  input{padding:4px;border:1px solid #555;border-radius:4px;background:#222;color:#eee}
-  button{padding:8px 14px;font-size:1rem;cursor:pointer;border:none;border-radius:4px;background:#3a8bff;color:#fff}
-  button:disabled{opacity:.4;cursor:not-allowed}
-  table{width:100%;border-collapse:collapse;margin-top:20px}
-  th,td{border:1px solid #333;padding:6px;text-align:center;font-size:0.9rem}
-  th{background:#222}
-  tr:nth-child(even){background:#1c1c1c}
-  .statBox{margin-top:15px;font-size:1rem}
-</style>
-</head>
-<body>
+/* =========================================================
+   Market Path Simulator
+   - Regime switching
+   - Fat tails
+   - Jump shocks
+   - Volatility clustering
+   - Percent returns
+   - Ladder touch stats
+========================================================= */
 
-<h1>📊 Market Simulation & Optimal Ladder Finder</h1>
+/* =========================
+   Random helpers
+========================= */
 
-<div id="controls">
-  <label>Min
-    <input type="number" id="minVal" value="0">
-  </label>
-  <label>Median
-    <input type="number" id="medVal" value="50">
-  </label>
-  <label>Max
-    <input type="number" id="maxVal" value="100">
-  </label>
-  <label>Ladder Steps
-    <input type="number" id="ladderSteps" value="3" min="1">
-  </label>
-  <label>Step Gap
-    <input type="number" id="stepGap" value="2" min="0.1" step="0.1">
-  </label>
-  <label>Max Start Gap
-    <input type="number" id="maxStart" value="20" min="0" step="0.1">
-  </label>
-  <label>Start-Gap Increment
-    <input type="number" id="scanInc" value="0.5" min="0.1" step="0.1">
-  </label>
-  <label>Ticks / Simulation
-    <input type="number" id="ticks" value="1000" min="10">
-  </label>
-  <label>Simulations
-    <input type="number" id="runs" value="50" min="1">
-  </label>
-  <button id="runBtn">Run Sims</button>
-  <button id="csvBtn" disabled>Download CSV</button>
-</div>
-
-<div class="statBox" id="summary"></div>
-<table id="resultTbl">
-  <thead>
-    <tr>
-      <th>#</th>
-      <th>Best Start Gap</th>
-      <th>Best Profit</th>
-      <th>Worst Profit</th>
-      <th>Avg Profit</th>
-    </tr>
-  </thead>
-  <tbody></tbody>
-</table>
-
-<script>
-/* ===== 3-Vector Noise Engine (same as before) ========================== */
-const big = { w:0.6, maxAcc:0.05 };
-const mid = { w:0.3, maxAcc:0.10 };
-const small = { w:0.1, maxAcc:0.30 };
-const vecTemplate = [big, mid, small];
-
-function rng(min,max){ return Math.random()*(max-min)+min; }
-function clamp(x,a,b){ return Math.min(Math.max(x,a),b); }
-
-function makeSeries(ticks,min,med,max){
-  const v = vecTemplate.map(o=>({pos:0,vel:0,...o}));
-  const out=[];
-  for(let t=0;t<ticks;t++){
-    v.forEach(o=>{
-      const acc=rng(-o.maxAcc,o.maxAcc);
-      o.vel=clamp(o.vel+acc,-o.maxAcc*10,o.maxAcc*10);
-      o.pos*=0.98; // drift damping
-      o.pos+=o.vel;
-    });
-    const delta=v.reduce((s,o)=>s+o.pos*o.w,0);
-    out.push(clamp(med+delta,min,max));
-  }
-  return out;
+function randUniform() {
+  return Math.random();
 }
 
-/* ===== Ladder Simulation ============================================== */
-function simulateLadder(series,med,steps,gap,startOffset,min,max){
-  // Build ladder levels
-  const buys = [], sells=[];
-  for(let i=0;i<steps;i++){
-    const off = startOffset + i*gap;
-    buys .push( clamp(med - off, min, max) );
-    sells.push( clamp(med + off, min, max) );
-  }
-  let inventory=[]; // each = {buyPrice, target}
-  let profit=0;
+function boxMuller() {
+  let u = 0;
+  let v = 0;
 
-  for(const price of series){
-    /* handle sells first: */
-    for(let i=inventory.length-1;i>=0;i--){
-      if(price>=inventory[i].target){
-        profit += inventory[i].target - inventory[i].buyPrice;
-        inventory.splice(i,1);
-      }
-    }
-    /* then buys in order (from closest to farthest) */
-    for(let i=0;i<steps;i++){
-      if(price<=buys[i] && !inventory.find(o=>o.buyPrice===buys[i])){ // buy if not already bought
-        inventory.push({buyPrice:buys[i], target:sells[i]});
-      }
-    }
-  }
-  /* Liquidate leftovers at last price */
-  const last=series[series.length-1];
-  for(const pos of inventory) profit += last - pos.buyPrice;
-  return profit;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-function findBestLadder(series,params){
-  const {med,steps,gap,maxStart,scanInc,min,max}=params;
-  let bestP=-Infinity, worstP=Infinity, bestStart=0, total=0, tested=0;
-  for(let s=0;s<=maxStart+1e-9;s+=scanInc){
-    const p=simulateLadder(series,med,steps,gap,s,min,max);
-    if(p>bestP){bestP=p;bestStart=s.toFixed(2);}
-    if(p<worstP) worstP=p;
-    total+=p; tested++;
+function studentT(df = 5) {
+  const z = boxMuller();
+
+  let chiSq = 0;
+  for (let i = 0; i < df; i++) {
+    const n = boxMuller();
+    chiSq += n * n;
   }
-  return {bestStart:+bestStart, bestProfit:bestP, worstProfit:worstP, avgProfit:total/tested};
+
+  return z / Math.sqrt(chiSq / df);
 }
 
-/* ===== UI Handling ===================================================== */
-const $=id=>document.getElementById(id);
-const tbody=$('resultTbl').querySelector('tbody');
+function clamp(x, min, max) {
+  return Math.max(min, Math.min(max, x));
+}
 
-$('runBtn').onclick=()=>{
-  const cfg={
-    min:+$('minVal').value,
-    med:+$('medVal').value,
-    max:+$('maxVal').value,
-    steps:+$('ladderSteps').value,
-    gap:+$('stepGap').value,
-    maxStart:+$('maxStart').value,
-    scanInc:+$('scanInc').value,
-    ticks:+$('ticks').value,
-    runs:+$('runs').value
-  };
-  tbody.innerHTML='';
-  let grandTotal=0, grandBest=0, grandWorst=Infinity;
-  const csvLines=['Run,BestStartGap,BestProfit,WorstProfit,AverageProfit'];
-  for(let r=1;r<=cfg.runs;r++){
-    const series=makeSeries(cfg.ticks,cfg.min,cfg.med,cfg.max);
-    const res=findBestLadder(series,{med:cfg.med,steps:cfg.steps,gap:cfg.gap,
-                                     maxStart:cfg.maxStart,scanInc:cfg.scanInc,
-                                     min:cfg.min,max:cfg.max});
-    grandTotal+=res.avgProfit;
-    grandBest = Math.max(grandBest,res.bestProfit);
-    grandWorst=Math.min(grandWorst,res.worstProfit);
-    csvLines.push([r,res.bestStart,res.bestProfit.toFixed(2),
-                      res.worstProfit.toFixed(2),
-                      res.avgProfit.toFixed(2)].join(','));
-    const row=document.createElement('tr');
-    row.innerHTML=`<td>${r}</td><td>${res.bestStart}</td><td>${res.bestProfit.toFixed(2)}</td><td>${res.worstProfit.toFixed(2)}</td><td>${res.avgProfit.toFixed(2)}</td>`;
-    tbody.appendChild(row);
+function pickWeighted(entries) {
+  const total = entries.reduce((s, e) => s + e.weight, 0);
+  let r = Math.random() * total;
+
+  for (const entry of entries) {
+    r -= entry.weight;
+    if (r <= 0) return entry.value;
   }
-  $('summary').innerHTML=
-      `✅ <strong>${cfg.runs}</strong> simulations complete  |  `+
-      `Overall Avg Profit: <strong>${(grandTotal/cfg.runs).toFixed(2)}</strong>   `+
-      `Max Profit: <strong>${grandBest.toFixed(2)}</strong>   `+
-      `Min Profit: <strong>${grandWorst.toFixed(2)}</strong>`;
-  $('csvBtn').disabled=false;
-  $('csvBtn').onclick=()=>{
-     const blob=new Blob([csvLines.join('\n')],{type:'text/csv'});
-     const url=URL.createObjectURL(blob);
-     const a=document.createElement('a');
-     a.href=url;a.download='simulation_results.csv';a.click();
-     setTimeout(()=>URL.revokeObjectURL(url),2000);
-  };
+
+  return entries[entries.length - 1].value;
+}
+
+/* =========================
+   Regimes
+========================= */
+
+/*
+  muPerTick:
+    expected log-return per candle
+
+  sigmaPerTick:
+    volatility per candle
+
+  jumpChance:
+    probability of a jump on each candle
+
+  jumpMean:
+    average jump log-return
+
+  jumpSigma:
+    jump volatility
+
+  persistence:
+    probability of remaining in the same regime
+*/
+
+const DEFAULT_REGIMES = {
+  chop: {
+    name: "chop",
+    muPerTick: 0.0000,
+    sigmaPerTick: 0.0025,
+    jumpChance: 0.002,
+    jumpMean: 0.0000,
+    jumpSigma: 0.010,
+    persistence: 0.94
+  },
+
+  trendUp: {
+    name: "trendUp",
+    muPerTick: 0.0008,
+    sigmaPerTick: 0.0040,
+    jumpChance: 0.004,
+    jumpMean: 0.0040,
+    jumpSigma: 0.012,
+    persistence: 0.92
+  },
+
+  trendDown: {
+    name: "trendDown",
+    muPerTick: -0.0008,
+    sigmaPerTick: 0.0045,
+    jumpChance: 0.004,
+    jumpMean: -0.0040,
+    jumpSigma: 0.014,
+    persistence: 0.92
+  },
+
+  squeeze: {
+    name: "squeeze",
+    muPerTick: 0.0020,
+    sigmaPerTick: 0.0080,
+    jumpChance: 0.010,
+    jumpMean: 0.0100,
+    jumpSigma: 0.025,
+    persistence: 0.82
+  },
+
+  panic: {
+    name: "panic",
+    muPerTick: -0.0022,
+    sigmaPerTick: 0.0090,
+    jumpChance: 0.012,
+    jumpMean: -0.0120,
+    jumpSigma: 0.030,
+    persistence: 0.82
+  }
 };
-</script>
-</body>
-</html>
+
+const DEFAULT_TRANSITIONS = {
+  chop: [
+    { value: "chop", weight: 70 },
+    { value: "trendUp", weight: 12 },
+    { value: "trendDown", weight: 12 },
+    { value: "squeeze", weight: 3 },
+    { value: "panic", weight: 3 }
+  ],
+
+  trendUp: [
+    { value: "trendUp", weight: 65 },
+    { value: "chop", weight: 20 },
+    { value: "squeeze", weight: 10 },
+    { value: "trendDown", weight: 4 },
+    { value: "panic", weight: 1 }
+  ],
+
+  trendDown: [
+    { value: "trendDown", weight: 65 },
+    { value: "chop", weight: 20 },
+    { value: "panic", weight: 10 },
+    { value: "trendUp", weight: 4 },
+    { value: "squeeze", weight: 1 }
+  ],
+
+  squeeze: [
+    { value: "squeeze", weight: 45 },
+    { value: "trendUp", weight: 30 },
+    { value: "chop", weight: 15 },
+    { value: "trendDown", weight: 7 },
+    { value: "panic", weight: 3 }
+  ],
+
+  panic: [
+    { value: "panic", weight: 45 },
+    { value: "trendDown", weight: 30 },
+    { value: "chop", weight: 15 },
+    { value: "trendUp", weight: 7 },
+    { value: "squeeze", weight: 3 }
+  ]
+};
+
+function nextRegime(currentRegime, regimes, transitions) {
+  const regime = regimes[currentRegime];
+
+  if (Math.random() < regime.persistence) {
+    return currentRegime;
+  }
+
+  return pickWeighted(transitions[currentRegime]);
+}
+
+/* =========================
+   Main simulator
+========================= */
+
+function generateMarketPath({
+  ticks,
+  S0,
+  startRegime = "chop",
+  regimes = DEFAULT_REGIMES,
+  transitions = DEFAULT_TRANSITIONS,
+
+  df = 5,
+  shockClamp = 6,
+
+  // Volatility clustering
+  volCluster = true,
+  volAlpha = 0.08,
+  volBeta = 0.90,
+  initialVolMultiplier = 1.0,
+
+  // Optional hard bounds to prevent absurd simulated paths
+  minPrice = 0.01,
+  maxPrice = Infinity
+}) {
+  if (!Number.isFinite(ticks) || ticks < 2) {
+    throw new Error("ticks must be at least 2.");
+  }
+
+  if (!Number.isFinite(S0) || S0 <= 0) {
+    throw new Error("S0 must be a positive number.");
+  }
+
+  const prices = [S0];
+  const returnsPct = [0];
+  const logReturns = [0];
+  const regimeSeq = [startRegime];
+
+  let currentRegime = startRegime;
+  let volMultiplier = initialVolMultiplier;
+  let prevShockAbs = 0;
+
+  for (let i = 1; i < ticks; i++) {
+    currentRegime = nextRegime(currentRegime, regimes, transitions);
+    const r = regimes[currentRegime];
+
+    let z = studentT(df);
+    z = clamp(z, -shockClamp, shockClamp);
+
+    if (volCluster) {
+      volMultiplier =
+        1 +
+        volAlpha * prevShockAbs +
+        volBeta * (volMultiplier - 1);
+
+      volMultiplier = clamp(volMultiplier, 0.5, 5.0);
+    }
+
+    let logReturn =
+      r.muPerTick +
+      r.sigmaPerTick * volMultiplier * z;
+
+    const jumpHappens = Math.random() < r.jumpChance;
+    if (jumpHappens) {
+      const jumpShock = r.jumpMean + r.jumpSigma * studentT(df);
+      logReturn += clamp(jumpShock, -0.20, 0.20);
+    }
+
+    const prev = prices[i - 1];
+    let next = prev * Math.exp(logReturn);
+
+    next = clamp(next, minPrice, maxPrice);
+
+    prices.push(next);
+    logReturns.push(logReturn);
+    returnsPct.push((next / prev - 1) * 100);
+    regimeSeq.push(currentRegime);
+
+    prevShockAbs = Math.abs(z);
+  }
+
+  return {
+    prices,
+    returnsPct,
+    logReturns,
+    regimes: regimeSeq
+  };
+}
+
+/* =========================
+   Antithetic twin generator
+   Note:
+   This is less clean with regime switching, but still useful
+   if you want paired shock paths.
+========================= */
+
+function generateMarketPathFromShocks({
+  ticks,
+  S0,
+  zSeq,
+  jumpSeq,
+  startRegime = "chop",
+  regimes = DEFAULT_REGIMES,
+  transitions = DEFAULT_TRANSITIONS,
+  volCluster = true,
+  volAlpha = 0.08,
+  volBeta = 0.90,
+  initialVolMultiplier = 1.0,
+  minPrice = 0.01,
+  maxPrice = Infinity
+}) {
+  const prices = [S0];
+  const returnsPct = [0];
+  const logReturns = [0];
+  const regimeSeq = [startRegime];
+
+  let currentRegime = startRegime;
+  let volMultiplier = initialVolMultiplier;
+  let prevShockAbs = 0;
+
+  for (let i = 1; i < ticks; i++) {
+    currentRegime = nextRegime(currentRegime, regimes, transitions);
+    const r = regimes[currentRegime];
+
+    const z = zSeq[i - 1];
+
+    if (volCluster) {
+      volMultiplier =
+        1 +
+        volAlpha * prevShockAbs +
+        volBeta * (volMultiplier - 1);
+
+      volMultiplier = clamp(volMultiplier, 0.5, 5.0);
+    }
+
+    let logReturn =
+      r.muPerTick +
+      r.sigmaPerTick * volMultiplier * z;
+
+    const jump = jumpSeq[i - 1];
+    if (jump !== 0) {
+      logReturn += jump;
+    }
+
+    const prev = prices[i - 1];
+    let next = prev * Math.exp(logReturn);
+
+    next = clamp(next, minPrice, maxPrice);
+
+    prices.push(next);
+    logReturns.push(logReturn);
+    returnsPct.push((next / prev - 1) * 100);
+    regimeSeq.push(currentRegime);
+
+    prevShockAbs = Math.abs(z);
+  }
+
+  return {
+    prices,
+    returnsPct,
+    logReturns,
+    regimes: regimeSeq
+  };
+}
+
+function generatePaths({
+  count,
+  ticks,
+  S0,
+  startRegime = "chop",
+  regimes = DEFAULT_REGIMES,
+  transitions = DEFAULT_TRANSITIONS,
+  df = 5,
+  shockClamp = 6
+}) {
+  const paths = [];
+  const pairs = Math.floor(count / 2);
+
+  for (let i = 0; i < pairs; i++) {
+    const zSeq = [];
+    const jumpSeq = [];
+
+    for (let j = 0; j < ticks - 1; j++) {
+      const z = clamp(studentT(df), -shockClamp, shockClamp);
+      zSeq.push(z);
+
+      // Leave jumps to the regime model in normal path generation.
+      // For antithetic mode, use no explicit paired jumps here.
+      jumpSeq.push(0);
+    }
+
+    paths.push(
+      generateMarketPathFromShocks({
+        ticks,
+        S0,
+        zSeq,
+        jumpSeq,
+        startRegime,
+        regimes,
+        transitions
+      })
+    );
+
+    paths.push(
+      generateMarketPathFromShocks({
+        ticks,
+        S0,
+        zSeq: zSeq.map(z => -z),
+        jumpSeq: jumpSeq.map(j => -j),
+        startRegime,
+        regimes,
+        transitions
+      })
+    );
+  }
+
+  if (paths.length < count) {
+    paths.push(
+      generateMarketPath({
+        ticks,
+        S0,
+        startRegime,
+        regimes,
+        transitions,
+        df,
+        shockClamp
+      })
+    );
+  }
+
+  return paths;
+}
+
+/* =========================
+   Statistics
+========================= */
+
+function getPathStats(path) {
+  const prices = path.prices;
+  const start = prices[0];
+  const end = prices[prices.length - 1];
+
+  let high = start;
+  let low = start;
+  let peak = start;
+  let maxDrawdownPct = 0;
+
+  for (const price of prices) {
+    high = Math.max(high, price);
+    low = Math.min(low, price);
+
+    peak = Math.max(peak, price);
+    const drawdownPct = (price / peak - 1) * 100;
+    maxDrawdownPct = Math.min(maxDrawdownPct, drawdownPct);
+  }
+
+  return {
+    start,
+    end,
+    high,
+    low,
+    totalReturnPct: (end / start - 1) * 100,
+    highFromStartPct: (high / start - 1) * 100,
+    lowFromStartPct: (low / start - 1) * 100,
+    rangePct: (high / low - 1) * 100,
+    maxDrawdownPct
+  };
+}
+
+function percentile(values, p) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.floor((p / 100) * (sorted.length - 1));
+  return sorted[idx];
+}
+
+function summarizePaths(paths) {
+  const stats = paths.map(getPathStats);
+
+  const get = key => stats.map(s => s[key]);
+  const avg = arr => arr.reduce((s, x) => s + x, 0) / arr.length;
+
+  return {
+    pathCount: paths.length,
+
+    avgReturnPct: avg(get("totalReturnPct")),
+    medianReturnPct: percentile(get("totalReturnPct"), 50),
+    p10ReturnPct: percentile(get("totalReturnPct"), 10),
+    p90ReturnPct: percentile(get("totalReturnPct"), 90),
+
+    avgHighFromStartPct: avg(get("highFromStartPct")),
+    avgLowFromStartPct: avg(get("lowFromStartPct")),
+    avgRangePct: avg(get("rangePct")),
+    avgMaxDrawdownPct: avg(get("maxDrawdownPct"))
+  };
+}
+
+/* =========================
+   Ladder touch probabilities
+========================= */
+
+function analyzeLadderTouches(paths, levels) {
+  return levels.map(level => {
+    let touched = 0;
+    let firstTouchTicks = [];
+
+    for (const path of paths) {
+      const prices = path.prices;
+      const start = prices[0];
+
+      const isAbove = level > start;
+      let touchIndex = -1;
+
+      for (let i = 0; i < prices.length; i++) {
+        if (isAbove && prices[i] >= level) {
+          touchIndex = i;
+          break;
+        }
+
+        if (!isAbove && prices[i] <= level) {
+          touchIndex = i;
+          break;
+        }
+      }
+
+      if (touchIndex !== -1) {
+        touched++;
+        firstTouchTicks.push(touchIndex);
+      }
+    }
+
+    return {
+      level,
+      touchProbabilityPct: (touched / paths.length) * 100,
+      avgFirstTouchTick:
+        firstTouchTicks.length > 0
+          ? firstTouchTicks.reduce((s, x) => s + x, 0) / firstTouchTicks.length
+          : null
+    };
+  });
+}
+
+/* =========================
+   Leveraged ETF approximation
+   For intraday only.
+   For multi-day simulation, reset each day.
+========================= */
+
+function simulateLeveragedETFFromUnderlying(path, {
+  etfStart,
+  leverage = 2,
+  expenseDragPerTick = 0,
+  floor = 0.01
+}) {
+  const underlying = path.prices;
+  const etf = [etfStart];
+
+  for (let i = 1; i < underlying.length; i++) {
+    const underlyingReturn = underlying[i] / underlying[i - 1] - 1;
+    const etfReturn = leverage * underlyingReturn - expenseDragPerTick;
+
+    const next = Math.max(floor, etf[i - 1] * (1 + etfReturn));
+    etf.push(next);
+  }
+
+  return etf;
+}
+    const paths = generatePaths({
+  count: 2000,
+  ticks: 390,   // one trading day of 1-minute candles
+  S0: 156,
+  startRegime: "chop"
+});
+
+console.log(summarizePaths(paths));
+
+console.log(
+  analyzeLadderTouches(paths, [
+    150,
+    152,
+    154,
+    158,
+    160,
+    162,
+    165
+  ])
+);
